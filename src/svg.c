@@ -1113,7 +1113,8 @@ static void svg_ps_bars(FILE *of,
         double w = 0.0;
 
         fprintf(of, "<!-- Process graph -->\n");
-        fprintf(of, "<text class=\"t2\" x=\"5\" y=\"-15\">Processes</text>\n");
+        fprintf(of, "<text class=\"t2\" x=\"5\" y=\"-15\">Processes: CPU used (blue), waiting for a CPU (yellow), "
+                "reading or writing (orange); a dashed line joins a process to its parent</text>\n");
 
         /* surrounding box */
         svg_graph_box(of, head, pcount, graph_start);

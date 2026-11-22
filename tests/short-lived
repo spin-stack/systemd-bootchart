@@ -1,7 +1,8 @@
 #! /bin/sh
 # A boot's generators and executors run for a millisecond or one sample's interval. The chart
 # draws every process that ran while it did, however briefly, and drops what did not run.
-# A process's bar is labelled "name [pid]<tspan", which the summary tables are not.
+# A process's bar is labelled "name [pid]<tspan", which the summary tables are not. The graph's
+# title says what its colours are and that a dashed line joins a process to its parent.
 set -e
 d=$(mktemp -d)
 trap 'rm -rf "$d"' EXIT
@@ -47,5 +48,7 @@ if grep -qF '<![CDATA[kworker-idle]]> [20]<tspan' "$svg"; then
         echo "not ok - the chart kept a kernel thread that never ran while it did"
         fail=1
 fi
+grep -qF '>Processes: CPU used (blue), waiting for a CPU (yellow), reading or writing (orange); a dashed line joins a process to its parent</text>' "$svg" ||
+        { echo "not ok - nothing says what the process graph's colours and dashed lines are"; fail=1; }
 [ $fail -eq 0 ] || grep -F '[CDATA[' "$svg"
 exit $fail
