@@ -75,7 +75,6 @@ struct ps_struct {
         char *cgroup;
 
         /* cache fd's */
-        int sched;
         int schedstat;
         FILE *smaps;
 
@@ -85,9 +84,6 @@ struct ps_struct {
         /* pointers to first/last seen timestamps */
         struct ps_sched_struct *first;
         struct ps_sched_struct *last;
-
-        /* records actual start time, may be way before bootchart runs */
-        double starttime;
 
         /* record human readable total cpu time */
         double total;
@@ -117,3 +113,4 @@ extern double arg_scale_y;
 
 extern char arg_output_path[PATH_MAX];
 extern char arg_init_path[PATH_MAX];
+extern char arg_proc_path[PATH_MAX];

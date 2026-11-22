@@ -37,6 +37,8 @@
 #include "log.h"
 #include "macro.h"
 #include "stdio-util.h"
+#include "store.h"
+#include "string-util.h"
 #include "svg.h"
 #include "utf8.h"
 
@@ -1137,21 +1139,21 @@ static void svg_ps_bars(FILE *of,
 
                 /* text label of process name */
                 if ((ps->last->runtime - ps->first->runtime) > 1000000000.0)
-                        fprintf(of, "  <text x=\"%.03f\" y=\"%.03f\"><![CDATA[%s]]> [%i]<tspan class=\"run\">%.03fs</tspan> %s</text>\n",
+                        fprintf(of, "  <text x=\"%.03f\" y=\"%.03f\"><![CDATA[%s]]> [%i]<tspan class=\"run\">%.03fs</tspan> <![CDATA[%s]]></text>\n",
                                 time_to_graph(w - graph_start) + 5.0,
                                 ps_to_graph(j) + 14.0,
                                 escaped ? escaped : ps->name,
                                 ps->pid,
                                 (ps->last->runtime - ps->first->runtime) / 1000000000.0,
-                                arg_show_cgroup ? ps->cgroup : "");
+                                strempty(ps_unit(ps)));
                 else
-                        fprintf(of, "  <text x=\"%.03f\" y=\"%.03f\"><![CDATA[%s]]> [%i]<tspan class=\"run\">%.01fms</tspan> %s</text>\n",
+                        fprintf(of, "  <text x=\"%.03f\" y=\"%.03f\"><![CDATA[%s]]> [%i]<tspan class=\"run\">%.01fms</tspan> <![CDATA[%s]]></text>\n",
                                 time_to_graph(w - graph_start) + 5.0,
                                 ps_to_graph(j) + 14.0,
                                 escaped ? escaped : ps->name,
                                 ps->pid,
                                 (ps->last->runtime - ps->first->runtime) / 1000000.0,
-                                arg_show_cgroup ? ps->cgroup : "");
+                                strempty(ps_unit(ps)));
 
                 /* paint lines to the parent process */
                 if (ps->parent) {
@@ -1277,6 +1279,56 @@ static void svg_top_ten_cpu(FILE *of, struct ps_struct *ps_first) {
                         top[n]->pid);
 }
 
+/* CPU time by unit: what the boot spent its CPU on, whichever processes of a unit spent it. */
+static void svg_top_ten_units(FILE *of, struct ps_struct *ps_first) {
+        struct unit_total {
+                const char *unit;
+                double total;
+                int processes;
+        } units[256] = {}, *top[10] = {};
+        struct ps_struct *ps;
+        int n_units = 0, n, m;
+
+        ps = ps_first;
+        while ((ps = get_next_ps(ps, ps_first))) {
+                const char *unit = ps_unit(ps);
+
+                if (!unit)
+                        continue;
+
+                for (n = 0; n < n_units && !streq(units[n].unit, unit); n++)
+                        ;
+                if (n == n_units) {
+                        if (n_units == (int) ELEMENTSOF(units))
+                                continue;
+                        units[n_units++].unit = unit;
+                }
+                units[n].total += ps->total;
+                units[n].processes++;
+        }
+
+        for (n = 0; n < n_units; n++)
+                for (m = 0; m < (int) ELEMENTSOF(top); m++) {
+                        int k;
+
+                        if (top[m] && units[n].total <= top[m]->total)
+                                continue;
+                        for (k = ELEMENTSOF(top) - 1; k > m; k--)
+                                top[k] = top[k-1];
+                        top[m] = &units[n];
+                        break;
+                }
+
+        fprintf(of, "<text class=\"t2\" x=\"20\" y=\"0\">Top CPU consumers by unit:</text>\n");
+        for (n = 0; n < (int) ELEMENTSOF(top) && top[n]; n++)
+                fprintf(of, "<text class=\"t3\" x=\"20\" y=\"%d\">%3.01fms - <![CDATA[%s]]> (%d %s)</text>\n",
+                        20 + (n * 13),
+                        to_ms(top[n]->total),
+                        top[n]->unit,
+                        top[n]->processes,
+                        top[n]->processes == 1 ? "process" : "processes");
+}
+
 static void svg_top_ten_pss(FILE *of, struct ps_struct *ps_first) {
         struct ps_struct *top[10];
         struct ps_struct emptyps = {};
@@ -1392,6 +1444,12 @@ int svg_do(FILE *of,
         svg_top_ten_cpu(of, ps_first);
         fprintf(of, "</g>\n\n");
 
+        if (arg_show_cgroup) {
+                fprintf(of, "<g transform=\"translate(410,200)\">\n");
+                svg_top_ten_units(of, ps_first);
+                fprintf(of, "</g>\n\n");
+        }
+
         if (arg_entropy) {
                 fprintf(of, "<g transform=\"translate(10,%.03f)\">\n", 400.0 + (arg_scale_y * offset) + ksize + psize);
                 svg_entropy_bar(of, head, graph_start);
@@ -1403,7 +1461,7 @@ int svg_do(FILE *of,
                 svg_pss_graph(of, head, ps_first, graph_start);
                 fprintf(of, "</g>\n\n");
 
-                fprintf(of, "<g transform=\"translate(410,200)\">\n");
+                fprintf(of, "<g transform=\"translate(%d,200)\">\n", arg_show_cgroup ? 810 : 410);
                 svg_top_ten_pss(of, ps_first);
                 fprintf(of, "</g>\n\n");
         }

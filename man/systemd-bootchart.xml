@@ -193,9 +193,22 @@
       </varlistentry>
 
       <varlistentry>
-        <term><option>-g</option></term>
+        <term><option>-c</option></term>
         <term><option>--control-group</option></term>
-        <listitem><para>Display process control group
+        <listitem><para>Label each process with the unit whose control
+        group it is in, such as <filename>systemd-journald.service</filename>,
+        and list the units that used the most CPU time. The control group is
+        read from the cgroup v2 hierarchy, or from systemd's own hierarchy on
+        a v1 or hybrid one, and read again whenever the process has run, since
+        a service's processes move into its unit's control group after they
+        start.</para></listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>--proc <replaceable>path</replaceable></option></term>
+        <listitem><para>Sample processes from this directory instead of
+        <filename>/proc</filename>. Its layout is
+        <filename>/proc</filename>'s, and its use is a test's.
         </para></listitem>
       </varlistentry>
 
