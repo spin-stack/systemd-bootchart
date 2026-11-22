@@ -218,7 +218,12 @@
         <term><option>--output <replaceable>path</replaceable></option></term>
         <listitem><para>Specify the output directory for the graphs.
         By default, bootchart writes the graphs to
-        <filename>/run/log</filename>.</para></listitem>
+        <filename>/run/log</filename>. Beside each
+        <filename>bootchart-<replaceable>date</replaceable>.svg</filename>
+        it writes <filename>bootchart-<replaceable>date</replaceable>.json</filename>,
+        the chart's numbers for a program to read: the system's cumulative
+        counters at every sample, and every process's totals. Its layout is
+        described at the top of <filename>src/json.c</filename>.</para></listitem>
       </varlistentry>
 
       <varlistentry>

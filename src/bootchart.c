@@ -56,6 +56,7 @@
 #include "fd-util.h"
 #include "fileio.h"
 #include "io-util.h"
+#include "json.h"
 #include "list.h"
 #include "log.h"
 #include "macro.h"
@@ -326,12 +327,14 @@ int main(int argc, char *argv[]) {
         _cleanup_closedir_ DIR *proc = NULL;
         _cleanup_free_ char *build = NULL;
         _cleanup_fclose_ FILE *of = NULL;
+        _cleanup_fclose_ FILE *json = NULL;
         int schfd;
         struct ps_struct *ps_first;
         double graph_start;
         double log_start;
         double interval;
         char output_file[PATH_MAX];
+        char json_file[PATH_MAX];
         char datestr[200];
         int pscount = 0;
         int n_cpus = 0;
@@ -513,6 +516,21 @@ int main(int argc, char *argv[]) {
         }
 
         log_info("systemd-bootchart wrote %s\n", output_file);
+
+        snprintf(json_file, PATH_MAX, "%s/bootchart-%s.json", arg_output_path, datestr);
+        json = fopen(json_file, "we");
+        if (!json) {
+                log_error("Error opening output file '%s': %m\n", json_file);
+                return EXIT_FAILURE;
+        }
+
+        r = json_do(json, head, ps_first, n_cpus, graph_start, interval, overrun);
+        if (r < 0) {
+                log_error_errno(r, "Error writing %s: %m", json_file);
+                return EXIT_FAILURE;
+        }
+
+        log_info("systemd-bootchart wrote %s\n", json_file);
 
         r = do_journal_append(output_file);
         if (r < 0)
