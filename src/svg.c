@@ -101,7 +101,7 @@ static void svg_header(FILE *of, struct list_sample_data *head, double graph_sta
         /* as svg_do lays the chart out: graphs 7 rows apart below the header, the initcalls
          * and the processes under them, then entropy and Pss. An estimate left ~400px of
          * blank page below the processes. */
-        graphs = 2 + 2 * (n_cpus + 1) + (pressure_size > 0 ? _PRESSURE_MAX : 0) + (kcount ? 1 : 0);
+        graphs = 2 + (n_cpus + 1) + (pressure_size > 0 ? _PRESSURE_MAX : 0) + (kcount ? 1 : 0);
         h = 400.0 + graphs * 7 * arg_scale_y + ksize + psize + esize
             + (arg_pss ? (100.0 * arg_scale_y) + (arg_scale_y * 7.0) : 0.0);
 
@@ -837,55 +837,6 @@ static void svg_cpu_bar(FILE *of, struct list_sample_data *head, int n_cpus, int
         }
 }
 
-static void svg_wait_bar(FILE *of, struct list_sample_data *head, int n_cpus, int cpu_num, double graph_start) {
-
-        fprintf(of, "<!-- Wait time aggregation box -->\n");
-
-        if (cpu_num < 0)
-                fprintf(of, "<text class=\"t2\" x=\"5\" y=\"-15\">CPU[overall] wait</text>\n");
-        else
-                fprintf(of, "<text class=\"t2\" x=\"5\" y=\"-15\">CPU[%d] wait</text>\n", cpu_num);
-
-        /* surrounding box */
-        svg_graph_box(of, head, 5, graph_start);
-
-        /* bars for each sample, proportional to the CPU util. */
-        prev_sampledata = head;
-        LIST_FOREACH_BEFORE(link, sampledata, head) {
-                int c;
-                double twt;
-                double ptwt;
-
-                ptwt = twt = 0.0;
-
-                if (cpu_num < 0)
-                        for (c = 0; c < n_cpus; c++)
-                                twt += sampledata->waittime[c] - prev_sampledata->waittime[c];
-                else
-                        twt = sampledata->waittime[cpu_num] - prev_sampledata->waittime[cpu_num];
-
-                twt = twt / 1000000000.0;
-
-                if (cpu_num < 0)
-                        twt = twt / (double)n_cpus;
-
-                if (twt > 0.0)
-                        ptwt = twt / (sampledata->sampletime - prev_sampledata->sampletime);
-
-                if (ptwt > 1.0)
-                        ptwt = 1.0;
-
-                if (ptwt > 0.001)
-                        fprintf(of, "<rect class=\"wait\" x=\"%.03f\" y=\"%.03f\" width=\"%.03f\" height=\"%.03f\" />\n",
-                                time_to_graph(prev_sampledata->sampletime - graph_start),
-                                ((arg_scale_y * 5) - (ptwt * (arg_scale_y * 5))),
-                                time_to_graph(sampledata->sampletime - prev_sampledata->sampletime),
-                                ptwt * (arg_scale_y * 5));
-
-                prev_sampledata = sampledata;
-        }
-}
-
 static const char *const pressure_names[_PRESSURE_MAX] = {
         [PRESSURE_CPU] = "CPU",
         [PRESSURE_IO] = "IO",
@@ -1603,15 +1554,14 @@ int svg_do(FILE *of,
         svg_io_bo_bar(of, head, n_samples, graph_start, interval);
         fprintf(of, "</g>\n\n");
 
+        /* No graph of the CPUs' summed run delay, which upstream drew under each of these: it
+         * counts two tasks waiting at once twice, and on one CPU it sat at its ceiling through
+         * a boot and read like one bound by IO. CPU pressure says when tasks waited, and each
+         * process's bar and the tables say who. */
         for (c = -1; c < (arg_percpu ? n_cpus : 0); c++) {
                 offset += 7;
                 fprintf(of, "<g transform=\"translate(10,%.03f)\">\n", 400.0 + (arg_scale_y * offset));
                 svg_cpu_bar(of, head, n_cpus, c, graph_start);
-                fprintf(of, "</g>\n\n");
-
-                offset += 7;
-                fprintf(of, "<g transform=\"translate(10,%.03f)\">\n", 400.0 + (arg_scale_y * offset));
-                svg_wait_bar(of, head, n_cpus, c, graph_start);
                 fprintf(of, "</g>\n\n");
         }
 

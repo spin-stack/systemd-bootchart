@@ -1,7 +1,8 @@
 #! /bin/sh
 # On one CPU the question is who waits to run. The chart draws /proc/pressure's share of each
 # interval in which tasks stalled, and says how long each process waited for a CPU: its
-# schedstat run_delay, its threads' included.
+# schedstat run_delay, its threads' included. It draws no graph of the CPUs' summed run delay,
+# which counts two tasks waiting at once twice and on one CPU sat at its ceiling through a boot.
 set -e
 d=$(mktemp -d)
 trap 'rm -rf "$d"' EXIT
@@ -62,5 +63,8 @@ graph IO | grep -q 'class="pfull"' ||
         { echo "not ok - IO pressure draws no full stall"; fail=1; }
 [ -z "$(graph Memory)" ] ||
         { echo "not ok - Memory pressure draws a stall that never happened"; fail=1; }
+if grep -qF 'wait</text>' "$svg"; then
+        echo "not ok - the chart still draws the CPUs' summed run delay"; fail=1
+fi
 [ $fail -eq 0 ] || grep -F -e '[CDATA[' -e 'class="p' "$svg"
 exit $fail
