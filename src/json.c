@@ -19,6 +19,9 @@
  * /proc/vmstat's pgpgin and pgpgout, in KiB; and /proc/pressure's some and full totals for
  * cpu, io and memory, in us.
  *
+ * sampler_cpu_ns is the CPU time the sampler itself took to take the samples, which the
+ * system's run time includes and which the processes it charted could not use.
+ *
  * A process's cpu_ns, wait_ns, read_bytes and write_bytes are its totals at the last sample
  * that saw it: for a process already running when the chart started, they include what it did
  * before. first_seen and last_seen are the times of the samples that saw it first and last.
@@ -74,14 +77,15 @@ int json_do(FILE *of,
             int n_cpus,
             double graph_start,
             double interval,
-            int overrun) {
+            int overrun,
+            double sampler_cpu) {
 
         struct list_sample_data *s;
         struct ps_struct *ps;
         const char *sep;
 
-        fprintf(of, "{\"version\": 1, \"hz\": %g, \"interval\": %g, \"overrun\": %d, \"relative\": %s, \"cpus\": %d,\n",
-                arg_hz, interval / 1000000000.0, overrun, arg_relative ? "true" : "false", n_cpus);
+        fprintf(of, "{\"version\": 1, \"hz\": %g, \"interval\": %g, \"overrun\": %d, \"relative\": %s, \"cpus\": %d, \"sampler_cpu_ns\": %.0f,\n",
+                arg_hz, interval / 1000000000.0, overrun, arg_relative ? "true" : "false", n_cpus, sampler_cpu * 1000000000.0);
 
         fputs("\"sample_columns\": [\"time\", \"cpu_run_ns\", \"cpu_wait_ns\", \"pgpgin_kb\", \"pgpgout_kb\", "
               "\"cpu_some_us\", \"cpu_full_us\", \"io_some_us\", \"io_full_us\", \"memory_some_us\", \"memory_full_us\"],\n", of);

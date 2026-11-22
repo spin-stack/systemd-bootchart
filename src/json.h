@@ -19,4 +19,5 @@ int json_do(FILE *of,
             int n_cpus,
             double graph_start,
             double interval,
-            int overrun);
+            int overrun,
+            double sampler_cpu);

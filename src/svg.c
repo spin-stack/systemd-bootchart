@@ -74,6 +74,9 @@ static double psize = 0;
 static double ksize = 0;
 static double esize = 0;
 static double pressure_size = 0;
+
+/* the width of each table of top consumers, which with IO and wait amounts runs to ~90 characters */
+#define TABLE_WIDTH 560
 static struct list_sample_data *sampledata;
 static struct list_sample_data *prev_sampledata;
 
@@ -89,9 +92,10 @@ static void svg_header(FILE *of, struct list_sample_data *head, double graph_sta
                 sampledata_last = sampledata;
         }
 
-        /* min width is about 1600px due to the label */
+        /* min width is about 1600px due to the label, and the tables side by side need theirs */
         w = 150.0 + 10.0 + time_to_graph(sampledata_last->sampletime - graph_start) + 500;
-        w = ((w < 1600.0) ? 1600.0 : w);
+        w = MAX(w, 1600.0);
+        w = MAX(w, 20.0 + TABLE_WIDTH * (2 + arg_show_cgroup + arg_pss));
 
         /* height is variable based on pss, psize, ksize */
         h = 400.0 + (arg_scale_y * 30.0) /* base graphs and title */
@@ -162,8 +166,13 @@ static void svg_header(FILE *of, struct list_sample_data *head, double graph_sta
         fprintf(of, "    ]]>\n   </style>\n</defs>\n\n");
 }
 
-static int svg_title(FILE *of, const char *build, int pscount, double log_start, int overrun) {
+static char* xml_comment_encode(const char* name);
+
+static int svg_title(FILE *of, const char *build, int pscount, double log_start, int overrun,
+                     int n_samples, double sampler_cpu) {
         _cleanup_free_ char *cmdline = NULL;
+        _cleanup_free_ char *enc_cmdline = NULL;
+        char cmdline_path[PATH_MAX + 8];
         _cleanup_free_ char *model = NULL;
         _cleanup_free_ char *buf = NULL;
         char date[256] = "Unknown";
@@ -173,10 +182,14 @@ static int svg_title(FILE *of, const char *build, int pscount, double log_start,
         int r;
         struct utsname uts;
 
-        r = read_one_line_file("/proc/cmdline", &cmdline);
+        xsprintf(cmdline_path, "%s/cmdline", arg_proc_path);
+        /* a chart without the command line is still a chart, and a test's --proc has none */
+        r = read_one_line_file(cmdline_path, &cmdline);
         if (r < 0) {
-                log_error_errno(r, "Unable to read cmdline: %m");
-                return r;
+                log_info_errno(r, "Unable to read %s: %m", cmdline_path);
+                cmdline = strdup("");
+                if (!cmdline)
+                        return log_oom();
         }
 
         /* extract root fs so we can find disk model name in sysfs */
@@ -221,6 +234,13 @@ static int svg_title(FILE *of, const char *build, int pscount, double log_start,
         fprintf(of, "<text class=\"t2\" x=\"20\" y=\"65\">CPU: %s</text>\n", cpu);
         if (model)
                 fprintf(of, "<text class=\"t2\" x=\"20\" y=\"80\">Disk: %s</text>\n", model);
+        /* The command line in full is in a comment: on a VM it is a few hundred characters
+         * that crowd everything else in the header. */
+        enc_cmdline = xml_comment_encode(cmdline);
+        if (enc_cmdline)
+                fprintf(of, "<!-- Boot options: %s -->\n", enc_cmdline);
+        if (strlen(cmdline) > 150)
+                strcpy(cmdline + 147, "...");
         fprintf(of, "<text class=\"t2\" x=\"20\" y=\"95\">Boot options: %s</text>\n", cmdline);
         fprintf(of, "<text class=\"t2\" x=\"20\" y=\"110\">Build: %s</text>\n", build);
         fprintf(of, "<text class=\"t2\" x=\"20\" y=\"125\">Log start time: %.03fs</text>\n", log_start);
@@ -235,7 +255,10 @@ static int svg_title(FILE *of, const char *build, int pscount, double log_start,
 
         fprintf(of, "</text>\n");
         fprintf(of, "<text class=\"sec\" x=\"20\" y=\"155\">Graph data: %.03f samples/sec, recorded %i total, dropped %i samples, %i processes, %i filtered</text>\n",
-                arg_hz, arg_samples_len, overrun, pscount, pfiltered);
+                arg_hz, n_samples, overrun, pscount, pfiltered);
+        /* The sampler runs on the CPUs it charts, and its time is time the boot did not get. */
+        fprintf(of, "<text class=\"sec\" x=\"20\" y=\"167\">Sampler: %.01fms of CPU for %i samples, %.0fus a sample</text>\n",
+                to_ms(sampler_cpu), n_samples, n_samples > 0 ? sampler_cpu * 1000000.0 / n_samples : 0.0);
 
         return 0;
 }
@@ -1528,11 +1551,12 @@ int svg_do(FILE *of,
            double graph_start,
            double log_start,
            double interval,
-           int overrun) {
+           int overrun,
+           double sampler_cpu) {
 
         struct ps_struct *ps;
         double offset = 7;
-        int r, c;
+        int r, c, x;
 
         sampledata = head;
         LIST_FIND_TAIL(link, sampledata, head);
@@ -1606,23 +1630,26 @@ int svg_do(FILE *of,
         fprintf(of, "</g>\n\n");
 
         fprintf(of, "<g transform=\"translate(10,  0)\">\n");
-        r = svg_title(of, build, pscount, log_start, overrun);
+        r = svg_title(of, build, pscount, log_start, overrun, n_samples, sampler_cpu);
         fprintf(of, "</g>\n\n");
 
         if (r < 0)
                 return r;
 
-        fprintf(of, "<g transform=\"translate(10,200)\">\n");
+        x = 10;
+        fprintf(of, "<g transform=\"translate(%d,200)\">\n", x);
         svg_top_ten_cpu(of, ps_first);
         fprintf(of, "</g>\n\n");
 
         if (arg_show_cgroup) {
-                fprintf(of, "<g transform=\"translate(410,200)\">\n");
+                x += TABLE_WIDTH;
+                fprintf(of, "<g transform=\"translate(%d,200)\">\n", x);
                 svg_top_ten_units(of, ps_first);
                 fprintf(of, "</g>\n\n");
         }
 
-        fprintf(of, "<g transform=\"translate(%d,200)\">\n", arg_show_cgroup ? 810 : 410);
+        x += TABLE_WIDTH;
+        fprintf(of, "<g transform=\"translate(%d,200)\">\n", x);
         svg_top_ten_io(of, ps_first);
         fprintf(of, "</g>\n\n");
 
@@ -1637,7 +1664,8 @@ int svg_do(FILE *of,
                 svg_pss_graph(of, head, ps_first, graph_start);
                 fprintf(of, "</g>\n\n");
 
-                fprintf(of, "<g transform=\"translate(%d,200)\">\n", arg_show_cgroup ? 1210 : 810);
+                x += TABLE_WIDTH;
+                fprintf(of, "<g transform=\"translate(%d,200)\">\n", x);
                 svg_top_ten_pss(of, ps_first);
                 fprintf(of, "</g>\n\n");
         }

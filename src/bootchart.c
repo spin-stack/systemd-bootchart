@@ -41,6 +41,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
@@ -347,6 +349,8 @@ int main(int argc, char *argv[]) {
                 .sa_handler = signal_handler,
         };
         bool has_procfs = false;
+        struct rusage usage;
+        double sampler_cpu = 0.0;
         char vmstat_path[PATH_MAX + 8];
 
         parse_conf();
@@ -368,6 +372,10 @@ int main(int argc, char *argv[]) {
                 if (fork())
                         /* parent */
                         execl(arg_init_path, arg_init_path, NULL);
+
+                /* The sampler was exec'd as the kernel's init and would be charted as "init",
+                 * beside the systemd it forked from. */
+                (void) prctl(PR_SET_NAME, "bootchart");
         }
         argv[0][0] = '@';
 
@@ -484,6 +492,11 @@ int main(int argc, char *argv[]) {
                 LIST_PREPEND(link, head, sampledata);
         }
 
+        /* what sampling cost, before drawing adds to it */
+        if (getrusage(RUSAGE_SELF, &usage) == 0)
+                sampler_cpu = usage.ru_utime.tv_sec + usage.ru_stime.tv_sec +
+                              (usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1000000.0;
+
         /* do some cleanup, close fd's */
         ps = ps_first;
         while (ps->next_running) {
@@ -508,7 +521,7 @@ int main(int argc, char *argv[]) {
 
         r = svg_do(of, strna(build), head, ps_first,
                    samples, pscount, n_cpus, graph_start,
-                   log_start, interval, overrun);
+                   log_start, interval, overrun, sampler_cpu);
 
         if (r < 0) {
                 log_error_errno(r, "Error generating svg file: %m");
@@ -524,7 +537,7 @@ int main(int argc, char *argv[]) {
                 return EXIT_FAILURE;
         }
 
-        r = json_do(json, head, ps_first, n_cpus, graph_start, interval, overrun);
+        r = json_do(json, head, ps_first, n_cpus, graph_start, interval, overrun, sampler_cpu);
         if (r < 0) {
                 log_error_errno(r, "Error writing %s: %m", json_file);
                 return EXIT_FAILURE;
