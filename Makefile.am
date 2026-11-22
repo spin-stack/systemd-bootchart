@@ -76,7 +76,8 @@ EXTRA_DIST = \
 	tests/io \
 	tests/pressure \
 	tests/json \
-	tests/header
+	tests/header \
+	tests/before-proc
 
 MANPAGES = man/bootchart.conf.5 man/systemd-bootchart.1
 MANPAGES_ALIAS = man/bootchart.conf.d.5
@@ -206,7 +207,8 @@ TESTS = \
 	tests/io \
 	tests/pressure \
 	tests/json \
-	tests/header
+	tests/header \
+	tests/before-proc
 
 substitutions = \
 	'|rootlibexecdir=$(rootlibexecdir)|'

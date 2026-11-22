@@ -324,6 +324,23 @@ static int do_journal_append(char *file) {
         return 0;
 }
 
+/* As PID 1 the sampler starts before /proc is mounted, and its samples until then read no
+ * counters. The first that does holds everything the kernel counted since it started: drawn as a
+ * difference from zero, one interval read a boot's first 21 MB, wrote its first 124 KB and ran its
+ * first 79 ms of CPU, and the IO graphs' smoothing spread that over a quarter of a second
+ * (measured 2026-11-22, lab run 45060814905). The samples before it carry its counters instead,
+ * so the counting starts there. */
+static void counters_start_at(struct list_sample_data *head, const struct list_sample_data *first) {
+        struct list_sample_data *s;
+
+        LIST_FOREACH(link, s, head) {
+                memcpy(s->runtime, first->runtime, sizeof(s->runtime));
+                memcpy(s->waittime, first->waittime, sizeof(s->waittime));
+                memcpy(s->pressure, first->pressure, sizeof(s->pressure));
+                s->blockstat = first->blockstat;
+        }
+}
+
 int main(int argc, char *argv[]) {
         static struct list_sample_data *sampledata;
         _cleanup_closedir_ DIR *proc = NULL;
@@ -349,6 +366,7 @@ int main(int argc, char *argv[]) {
                 .sa_handler = signal_handler,
         };
         bool has_procfs = false;
+        bool counting = false;
         struct rusage usage;
         double sampler_cpu = 0.0;
         char vmstat_path[PATH_MAX + 8];
@@ -444,7 +462,7 @@ int main(int argc, char *argv[]) {
                 }
 
                 if (!has_procfs) {
-                        /* wait for /proc to become available, discarding samples */
+                        /* wait for /proc to become available: until then a sample reads nothing */
                         xsprintf(vmstat_path, "%s/vmstat", arg_proc_path);
         has_procfs = access(vmstat_path, F_OK) == 0;
                 } else if (proc) {
@@ -457,6 +475,10 @@ int main(int argc, char *argv[]) {
                         r = log_sample(proc, samples, ps_first, &sampledata, &pscount, &n_cpus);
                         if (r < 0)
                                 return EXIT_FAILURE;
+                        if (!counting) {
+                                counters_start_at(head, sampledata);
+                                counting = true;
+                        }
                 }
 
                 sample_stop = gettime_ns();
