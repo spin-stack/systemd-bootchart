@@ -24,6 +24,7 @@
 
 #include <limits.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 
 #include "list.h"
@@ -42,6 +43,10 @@ struct ps_sched_struct {
         /* /proc/<n>/schedstat fields 1 & 2 */
         double runtime;
         double waittime;
+        /* /proc/<n>/io read_bytes & write_bytes: what the process had the block layer read for
+         * it, and the bytes it dirtied, since it started */
+        uint64_t read_bytes;
+        uint64_t write_bytes;
         int pss;
         struct list_sample_data *sampledata;
         struct ps_sched_struct *next;
@@ -50,10 +55,24 @@ struct ps_sched_struct {
         struct ps_struct *ps_new;
 };
 
+enum {
+        PRESSURE_CPU,
+        PRESSURE_IO,
+        PRESSURE_MEMORY,
+        _PRESSURE_MAX,
+};
+
+enum {
+        PRESSURE_SOME,
+        PRESSURE_FULL,
+};
+
 struct list_sample_data {
         double runtime[MAXCPUS];
         double waittime[MAXCPUS];
         double sampletime;
+        /* /proc/pressure/{cpu,io,memory} some and full totals, in microseconds */
+        uint64_t pressure[_PRESSURE_MAX][2];
         int entropy_avail;
         struct block_stat_struct blockstat;
         LIST_FIELDS(struct list_sample_data, link); /* DLL */
@@ -75,7 +94,6 @@ struct ps_struct {
         char *cgroup;
 
         /* cache fd's */
-        int sched;
         int schedstat;
         FILE *smaps;
 
@@ -85,9 +103,6 @@ struct ps_struct {
         /* pointers to first/last seen timestamps */
         struct ps_sched_struct *first;
         struct ps_sched_struct *last;
-
-        /* records actual start time, may be way before bootchart runs */
-        double starttime;
 
         /* record human readable total cpu time */
         double total;
@@ -117,3 +132,4 @@ extern double arg_scale_y;
 
 extern char arg_output_path[PATH_MAX];
 extern char arg_init_path[PATH_MAX];
+extern char arg_proc_path[PATH_MAX];

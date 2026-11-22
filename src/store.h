@@ -28,6 +28,7 @@
 
 double gettime_ns(void);
 void log_uptime(void);
+const char *ps_unit(const struct ps_struct *ps);
 int log_sample(DIR *proc,
                int sample,
                struct ps_struct *ps_first,

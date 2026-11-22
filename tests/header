@@ -1,0 +1,32 @@
+#! /bin/sh
+# The chart's header says what the sampler cost, since it ran on the CPUs it charted, and the
+# JSON carries the same number. A VM's long command line is cut in the header and kept whole in
+# a comment, where XML does not allow "--".
+set -e
+d=$(mktemp -d)
+trap 'rm -rf "$d"' EXIT
+proc=$d/proc
+mkdir -p "$proc/1/task/1" "$d/out"
+printf 'pgpgin 0\npgpgout 0\n' > "$proc/vmstat"
+printf 'version 15\ntimestamp 0\ncpu0 0 0 0 0 0 0 1000 2000 3\n' > "$proc/schedstat"
+printf 'systemd\n' > "$proc/1/comm"
+printf '1 (systemd) S 0 0 0\n' > "$proc/1/stat"
+printf '0::/init.scope\n' > "$proc/1/cgroup"
+printf '5000000 0 1\n' > "$proc/1/schedstat"
+cmdline="console=ttyS0 root=/dev/vda -- $(printf 'option%03d ' $(seq 1 40))"
+printf '%s\n' "$cmdline" > "$proc/cmdline"
+
+timeout 30 ./systemd-bootchart --proc "$proc" -o "$d/out" -r -f 100 -n 20
+
+fail=0
+grep -qE '>Sampler: [0-9]+\.[0-9]ms of CPU for 20 samples, [0-9]+us a sample<' "$d"/out/*.svg ||
+        { echo "not ok - the header does not say what 20 samples cost"; fail=1; }
+grep -qE '"sampler_cpu_ns": [1-9][0-9]*,' "$d"/out/*.json ||
+        { echo "not ok - the JSON does not say what the samples cost"; fail=1; }
+grep -qE '<text[^>]*>Boot options: console=ttyS0 root=/dev/vda .{119}\.\.\.</text>' "$d"/out/*.svg ||
+        { echo "not ok - the header's command line is not cut to 150 characters"; fail=1; }
+grep -qF "<!-- Boot options: console=ttyS0 root=/dev/vda -_ option001" "$d"/out/*.svg ||
+        { echo "not ok - the full command line is not kept in a comment"; fail=1; }
+grep -qF "option040" "$d"/out/*.svg ||
+        { echo "not ok - the comment lost the command line's end"; fail=1; }
+exit $fail

@@ -104,11 +104,9 @@
       <varlistentry>
         <term><varname>Filter=no</varname></term>
         <listitem><para>Configures whether the resulting graph should
-        omit tasks that did not contribute significantly to the boot.
-        Processes that are too short-lived (only seen in one sample)
-        or that do not consume any significant CPU time (less than
-        0.001sec) will not be displayed in the output
-        graph.</para></listitem>
+        omit tasks that did not run while it was recorded, such as idle
+        kernel threads. A process that used CPU time in any sample's
+        interval is drawn, however briefly it ran.</para></listitem>
       </varlistentry>
 
       <varlistentry>
@@ -154,7 +152,8 @@
 
       <varlistentry>
         <term><varname>ControlGroup=no</varname></term>
-        <listitem><para>Display process control group.
+        <listitem><para>Label each process with the unit whose control
+        group it is in, and list the units that used the most CPU time.
         </para></listitem>
       </varlistentry>
 

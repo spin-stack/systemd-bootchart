@@ -1,0 +1,66 @@
+#! /bin/sh
+# On one CPU the question is who waits to run. The chart draws /proc/pressure's share of each
+# interval in which tasks stalled, and says how long each process waited for a CPU: its
+# schedstat run_delay, its threads' included.
+set -e
+d=$(mktemp -d)
+trap 'rm -rf "$d"' EXIT
+proc=$d/proc
+mkdir -p "$proc/pressure" "$d/out"
+
+put() {
+        printf "$2" > "$proc/$1"
+}
+
+pressure() { # resource some-total-us full-total-us
+        put "pressure/$1" "some avg10=0.00 avg60=0.00 avg300=0.00 total=$2\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=$3\n"
+}
+
+process() { # pid ppid comm runtime-ns waittime-ns
+        mkdir -p "$proc/$1/task/$1"
+        put "$1/comm" "$3\n"
+        put "$1/stat" "$1 ($3) S $2 0 0\n"
+        put "$1/cgroup" "0::/init.scope\n"
+        put "$1/cmdline" ""
+        put "$1/schedstat" "$4 $5 1\n"
+}
+
+put vmstat "pgpgin 0\npgpgout 0\n"
+put schedstat "version 15\ntimestamp 0\ncpu0 0 0 0 0 0 0 1000 2000 3\n"
+pressure cpu 1000 0
+pressure io 1000 500
+pressure memory 0 0
+process 1 0 systemd 5000000 0
+# udevd's second thread ran 7 ms and waited 1 ms
+process 74 1 systemd-udevd 1000000 2000000
+mkdir -p "$proc/74/task/75"
+put 74/task/75/schedstat "7000000 1000000 1\n"
+
+timeout 30 ./systemd-bootchart --proc "$proc" -o "$d/out" -r -f 100 -n 40 &
+sampler=$!
+sleep 0.15
+# a second of CPU stall in one 10 ms interval fills it; IO stalls some and full
+pressure cpu 1001000 0
+pressure io 1201000 1100500
+put 74/schedstat "2000000 2000000 2\n"
+put 1/schedstat "6000000 0 2\n"
+wait $sampler
+
+svg=$(echo "$d"/out/*.svg)
+fail=0
+expect() {
+        grep -qF -- "$1" "$svg" || { echo "not ok - the chart has no $1"; fail=1; }
+}
+graph() { # the rects of one pressure graph
+        sed -n "/<!-- $1 pressure -->/,/<\/g>/p" "$svg" | grep '<rect class="p' || true
+}
+expect '<![CDATA[systemd-udevd]]> [74]<tspan class="run">9.0ms, 3.0ms waiting</tspan>'
+expect '9.0ms, 3.0ms waiting - <![CDATA[systemd-udevd]]> [74]</text>'
+graph CPU | grep -q 'class="psome".*height="100.000"' ||
+        { echo "not ok - CPU pressure does not fill the interval with a second's stall"; fail=1; }
+graph IO | grep -q 'class="pfull"' ||
+        { echo "not ok - IO pressure draws no full stall"; fail=1; }
+[ -z "$(graph Memory)" ] ||
+        { echo "not ok - Memory pressure draws a stall that never happened"; fail=1; }
+[ $fail -eq 0 ] || grep -F -e '[CDATA[' -e 'class="p' "$svg"
+exit $fail

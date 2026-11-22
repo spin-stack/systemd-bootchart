@@ -41,6 +41,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
@@ -56,12 +58,14 @@
 #include "fd-util.h"
 #include "fileio.h"
 #include "io-util.h"
+#include "json.h"
 #include "list.h"
 #include "log.h"
 #include "macro.h"
 #include "parse-util.h"
 #include "path-util.h"
 #include "store.h"
+#include "stdio-util.h"
 #include "string-util.h"
 #include "strxcpyx.h"
 #include "svg.h"
@@ -75,6 +79,7 @@ static int exiting = 0;
 #define DEFAULT_SCALE_Y 20.0  /* 16px = 1 process bar */
 #define DEFAULT_INIT ROOTLIBEXECDIR "/systemd"
 #define DEFAULT_OUTPUT "/run/log"
+#define DEFAULT_PROC "/proc"
 
 /* graph defaults */
 bool arg_entropy = false;
@@ -92,6 +97,7 @@ double arg_scale_y = DEFAULT_SCALE_Y;
 
 char arg_init_path[PATH_MAX] = DEFAULT_INIT;
 char arg_output_path[PATH_MAX] = DEFAULT_OUTPUT;
+char arg_proc_path[PATH_MAX] = DEFAULT_PROC;
 
 static void signal_handler(int sig) {
         exiting = 1;
@@ -144,6 +150,7 @@ static void help(void) {
                "  -C --cmdline         Display full command lines with arguments\n"
                "  -c --control-group   Display process control group\n"
                "     --per-cpu         Draw each CPU utilization and wait bar also\n"
+               "     --proc=PATH       Sample processes from PATH instead of [%s]\n"
                "  -h --help            Display this message\n\n"
                "See bootchart.conf for more information.\n",
                program_invocation_short_name,
@@ -152,13 +159,15 @@ static void help(void) {
                DEFAULT_SCALE_X,
                DEFAULT_SCALE_Y,
                DEFAULT_OUTPUT,
-               DEFAULT_INIT);
+               DEFAULT_INIT,
+               DEFAULT_PROC);
 }
 
 static int parse_argv(int argc, char *argv[]) {
 
         enum {
                 ARG_PERCPU = 0x100,
+                ARG_PROC,
         };
 
         static const struct option options[] = {
@@ -176,6 +185,7 @@ static int parse_argv(int argc, char *argv[]) {
                 {"scale-y",       required_argument,  NULL,  'y'       },
                 {"entropy",       no_argument,        NULL,  'e'       },
                 {"per-cpu",       no_argument,        NULL,  ARG_PERCPU},
+                {"proc",          required_argument,  NULL,  ARG_PROC  },
                 {}
         };
         int c, r;
@@ -238,6 +248,10 @@ static int parse_argv(int argc, char *argv[]) {
                         break;
                 case ARG_PERCPU:
                         arg_percpu = true;
+                        break;
+                case ARG_PROC:
+                        path_kill_slashes(optarg);
+                        strscpy(arg_proc_path, sizeof(arg_proc_path), optarg);
                         break;
                 case 'h':
                         help();
@@ -315,12 +329,14 @@ int main(int argc, char *argv[]) {
         _cleanup_closedir_ DIR *proc = NULL;
         _cleanup_free_ char *build = NULL;
         _cleanup_fclose_ FILE *of = NULL;
+        _cleanup_fclose_ FILE *json = NULL;
         int schfd;
         struct ps_struct *ps_first;
         double graph_start;
         double log_start;
         double interval;
         char output_file[PATH_MAX];
+        char json_file[PATH_MAX];
         char datestr[200];
         int pscount = 0;
         int n_cpus = 0;
@@ -333,6 +349,9 @@ int main(int argc, char *argv[]) {
                 .sa_handler = signal_handler,
         };
         bool has_procfs = false;
+        struct rusage usage;
+        double sampler_cpu = 0.0;
+        char vmstat_path[PATH_MAX + 8];
 
         parse_conf();
 
@@ -353,6 +372,10 @@ int main(int argc, char *argv[]) {
                 if (fork())
                         /* parent */
                         execl(arg_init_path, arg_init_path, NULL);
+
+                /* The sampler was exec'd as the kernel's init and would be charted as "init",
+                 * beside the systemd it forked from. */
+                (void) prctl(PR_SET_NAME, "bootchart");
         }
         argv[0][0] = '@';
 
@@ -394,7 +417,8 @@ int main(int argc, char *argv[]) {
                 return EXIT_FAILURE;
         }
 
-        has_procfs = access("/proc/vmstat", F_OK) == 0;
+        xsprintf(vmstat_path, "%s/vmstat", arg_proc_path);
+        has_procfs = access(vmstat_path, F_OK) == 0;
 
         LIST_HEAD_INIT(head);
 
@@ -421,11 +445,12 @@ int main(int argc, char *argv[]) {
 
                 if (!has_procfs) {
                         /* wait for /proc to become available, discarding samples */
-                        has_procfs = access("/proc/vmstat", F_OK) == 0;
+                        xsprintf(vmstat_path, "%s/vmstat", arg_proc_path);
+        has_procfs = access(vmstat_path, F_OK) == 0;
                 } else if (proc) {
                         rewinddir(proc);
                 } else {
-                        proc = opendir("/proc");
+                        proc = opendir(arg_proc_path);
                 }
 
                 if (proc) {
@@ -467,12 +492,16 @@ int main(int argc, char *argv[]) {
                 LIST_PREPEND(link, head, sampledata);
         }
 
+        /* what sampling cost, before drawing adds to it */
+        if (getrusage(RUSAGE_SELF, &usage) == 0)
+                sampler_cpu = usage.ru_utime.tv_sec + usage.ru_stime.tv_sec +
+                              (usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1000000.0;
+
         /* do some cleanup, close fd's */
         ps = ps_first;
         while (ps->next_running) {
                 ps = ps->next_running;
                 ps->schedstat = safe_close(ps->schedstat);
-                ps->sched = safe_close(ps->sched);
                 ps->smaps = safe_fclose(ps->smaps);
         }
 
@@ -492,7 +521,7 @@ int main(int argc, char *argv[]) {
 
         r = svg_do(of, strna(build), head, ps_first,
                    samples, pscount, n_cpus, graph_start,
-                   log_start, interval, overrun);
+                   log_start, interval, overrun, sampler_cpu);
 
         if (r < 0) {
                 log_error_errno(r, "Error generating svg file: %m");
@@ -500,6 +529,21 @@ int main(int argc, char *argv[]) {
         }
 
         log_info("systemd-bootchart wrote %s\n", output_file);
+
+        snprintf(json_file, PATH_MAX, "%s/bootchart-%s.json", arg_output_path, datestr);
+        json = fopen(json_file, "we");
+        if (!json) {
+                log_error("Error opening output file '%s': %m\n", json_file);
+                return EXIT_FAILURE;
+        }
+
+        r = json_do(json, head, ps_first, n_cpus, graph_start, interval, overrun, sampler_cpu);
+        if (r < 0) {
+                log_error_errno(r, "Error writing %s: %m", json_file);
+                return EXIT_FAILURE;
+        }
+
+        log_info("systemd-bootchart wrote %s\n", json_file);
 
         r = do_journal_append(output_file);
         if (r < 0)
