@@ -73,7 +73,8 @@ EXTRA_DIST = \
 	tests/run \
 	tests/identity \
 	tests/short-lived \
-	tests/io
+	tests/io \
+	tests/pressure
 
 MANPAGES = man/bootchart.conf.5 man/systemd-bootchart.1
 MANPAGES_ALIAS = man/bootchart.conf.d.5
@@ -198,7 +199,8 @@ TESTS = \
 	tests/run \
 	tests/identity \
 	tests/short-lived \
-	tests/io
+	tests/io \
+	tests/pressure
 
 substitutions = \
 	'|rootlibexecdir=$(rootlibexecdir)|'

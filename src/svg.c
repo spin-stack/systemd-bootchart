@@ -73,6 +73,7 @@ static int kcount = 0;
 static double psize = 0;
 static double ksize = 0;
 static double esize = 0;
+static double pressure_size = 0;
 static struct list_sample_data *sampledata;
 static struct list_sample_data *prev_sampledata;
 
@@ -95,7 +96,7 @@ static void svg_header(FILE *of, struct list_sample_data *head, double graph_sta
         /* height is variable based on pss, psize, ksize */
         h = 400.0 + (arg_scale_y * 30.0) /* base graphs and title */
             + (arg_pss ? (100.0 * arg_scale_y) + (arg_scale_y * 7.0) : 0.0) /* pss estimate */
-            + psize + ksize + esize + ((n_cpus+1) * 15 * arg_scale_y);
+            + psize + ksize + esize + pressure_size + ((n_cpus+1) * 15 * arg_scale_y);
 
         fprintf(of, "<?xml version=\"1.0\" standalone=\"no\"?>\n");
         fprintf(of, "<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" ");
@@ -137,6 +138,8 @@ static void svg_header(FILE *of, struct list_sample_data *head, double graph_sta
         fprintf(of, "      rect.wait  { fill: rgb(240,240,0); stroke-width: 0; fill-opacity: 0.7; }\n");
         fprintf(of, "      rect.bi    { fill: rgb(240,128,128); stroke-width: 0; fill-opacity: 0.7; }\n");
         fprintf(of, "      rect.bo    { fill: rgb(192,64,64); stroke-width: 0; fill-opacity: 0.7; }\n");
+        fprintf(of, "      rect.psome { fill: rgb(240,160,0); stroke-width: 0; fill-opacity: 0.7; }\n");
+        fprintf(of, "      rect.pfull { fill: rgb(200,0,0); stroke-width: 0; fill-opacity: 0.7; }\n");
         fprintf(of, "      rect.io    { fill: rgb(240,128,0); stroke-width: 0; }\n");
         fprintf(of, "      rect.ps    { fill: rgb(192,192,192); stroke: rgb(128,128,128); fill-opacity: 0.7; }\n");
         fprintf(of, "      rect.krnl  { fill: rgb(240,240,0); stroke: rgb(128,128,128); fill-opacity: 0.7; }\n");
@@ -854,6 +857,64 @@ static void svg_wait_bar(FILE *of, struct list_sample_data *head, int n_cpus, in
         }
 }
 
+static const char *const pressure_names[_PRESSURE_MAX] = {
+        [PRESSURE_CPU] = "CPU",
+        [PRESSURE_IO] = "IO",
+        [PRESSURE_MEMORY] = "Memory",
+};
+
+/* Whether the kernel reported pressure: a kernel without it leaves every total at zero, and a
+ * kernel with it has had some task wait for a CPU by the time a chart ends. */
+static bool svg_has_pressure(struct list_sample_data *head) {
+        int r;
+
+        for (r = 0; r < _PRESSURE_MAX; r++)
+                if (head->pressure[r][PRESSURE_SOME] > 0)
+                        return true;
+        return false;
+}
+
+/* The share of each interval in which some task (orange), or every task (red), stalled waiting
+ * for the resource, from /proc/pressure. On one CPU, CPU pressure is the share of the time in
+ * which a task could have run and another one was running instead. */
+static void svg_pressure_bar(FILE *of, struct list_sample_data *head, int resource, double graph_start) {
+        fprintf(of, "<!-- %s pressure -->\n", pressure_names[resource]);
+        fprintf(of, "<text class=\"t2\" x=\"5\" y=\"-15\">%s pressure: some tasks stalled (orange), all tasks stalled (red)</text>\n",
+                pressure_names[resource]);
+
+        svg_graph_box(of, head, 5, graph_start);
+
+        prev_sampledata = head;
+        LIST_FOREACH_BEFORE(link, sampledata, head) {
+                double dt = sampledata->sampletime - prev_sampledata->sampletime;
+                int which;
+
+                for (which = PRESSURE_SOME; which <= PRESSURE_FULL; which++) {
+                        uint64_t now = sampledata->pressure[resource][which];
+                        uint64_t before = prev_sampledata->pressure[resource][which];
+                        double share;
+
+                        if (dt <= 0 || now <= before)
+                                continue;
+
+                        share = ((now - before) / 1000000.0) / dt;
+                        if (share > 1.0)
+                                share = 1.0;
+                        if (share < 0.001)
+                                continue;
+
+                        fprintf(of, "<rect class=\"%s\" x=\"%.03f\" y=\"%.03f\" width=\"%.03f\" height=\"%.03f\" />\n",
+                                which == PRESSURE_SOME ? "psome" : "pfull",
+                                time_to_graph(prev_sampledata->sampletime - graph_start),
+                                (arg_scale_y * 5) - (share * (arg_scale_y * 5)),
+                                time_to_graph(dt),
+                                share * (arg_scale_y * 5));
+                }
+
+                prev_sampledata = sampledata;
+        }
+}
+
 static void svg_entropy_bar(FILE *of, struct list_sample_data *head, double graph_start) {
 
         fprintf(of, "<!-- entropy pool graph -->\n");
@@ -1033,6 +1094,17 @@ static void svg_do_initcall(FILE *of, struct list_sample_data *head, int count_o
         }
 }
 
+/* The time the process spent runnable and waiting for a CPU, its schedstat run_delay, in seconds. */
+static double ps_wait(const struct ps_struct *ps) {
+        return (ps->last->waittime - ps->first->waittime) / 1000000000.0;
+}
+
+/* ", 1.2ms waiting", or nothing for a process that never waited */
+static void svg_wait_amount(FILE *of, double wait) {
+        if (wait >= 0.0001)
+                fprintf(of, ", %.01fms waiting", to_ms(wait));
+}
+
 /* "12.3MB read, 1.0MB written" after LEAD, leaving out what is zero, and LEAD too when both are */
 static void svg_io_amounts(FILE *of, const char *lead, uint64_t read_bytes, uint64_t write_bytes) {
         if (read_bytes > 0)
@@ -1189,6 +1261,7 @@ static void svg_ps_bars(FILE *of,
                         fprintf(of, "%.03fs", (ps->last->runtime - ps->first->runtime) / 1000000000.0);
                 else
                         fprintf(of, "%.01fms", (ps->last->runtime - ps->first->runtime) / 1000000.0);
+                svg_wait_amount(of, ps_wait(ps));
                 svg_io_amounts(of, ", ", ps->last->read_bytes, ps->last->write_bytes);
                 fprintf(of, "</tspan> <![CDATA[%s]]></text>\n", strempty(ps_unit(ps)));
 
@@ -1308,12 +1381,11 @@ static void svg_top_ten_cpu(FILE *of, struct ps_struct *ps_first) {
         }
 
         fprintf(of, "<text class=\"t2\" x=\"20\" y=\"0\">Top CPU consumers:</text>\n");
-        for (n = 0; n < 10; n++)
-                fprintf(of, "<text class=\"t3\" x=\"20\" y=\"%d\">%3.01fms - <![CDATA[%s]]> [%d]</text>\n",
-                        20 + (n * 13),
-                        to_ms(top[n]->total),
-                        top[n]->name,
-                        top[n]->pid);
+        for (n = 0; n < 10 && top[n] != &emptyps; n++) {
+                fprintf(of, "<text class=\"t3\" x=\"20\" y=\"%d\">%3.01fms", 20 + (n * 13), to_ms(top[n]->total));
+                svg_wait_amount(of, ps_wait(top[n]));
+                fprintf(of, " - <![CDATA[%s]]> [%d]</text>\n", top[n]->name, top[n]->pid);
+        }
 }
 
 /* CPU time by unit: what the boot spent its CPU on, whichever processes of a unit spent it. */
@@ -1321,6 +1393,7 @@ static void svg_top_ten_units(FILE *of, struct ps_struct *ps_first) {
         struct unit_total {
                 const char *unit;
                 double total;
+                double wait;
                 uint64_t read_bytes;
                 uint64_t write_bytes;
                 int processes;
@@ -1343,6 +1416,7 @@ static void svg_top_ten_units(FILE *of, struct ps_struct *ps_first) {
                         units[n_units++].unit = unit;
                 }
                 units[n].total += ps->total;
+                units[n].wait += ps_wait(ps);
                 units[n].read_bytes += ps->last->read_bytes;
                 units[n].write_bytes += ps->last->write_bytes;
                 units[n].processes++;
@@ -1365,6 +1439,7 @@ static void svg_top_ten_units(FILE *of, struct ps_struct *ps_first) {
                 fprintf(of, "<text class=\"t3\" x=\"20\" y=\"%d\">%3.01fms",
                         20 + (n * 13),
                         to_ms(top[n]->total));
+                svg_wait_amount(of, top[n]->wait);
                 svg_io_amounts(of, ", ", top[n]->read_bytes, top[n]->write_bytes);
                 fprintf(of, " - <![CDATA[%s]]> (%d %s)</text>\n",
                         top[n]->unit,
@@ -1479,6 +1554,7 @@ int svg_do(FILE *of,
         psize = ps_to_graph(pcount) + (arg_scale_y * 2);
 
         esize = (arg_entropy ? arg_scale_y * 7 : 0);
+        pressure_size = svg_has_pressure(head) ? _PRESSURE_MAX * 7 * arg_scale_y : 0;
 
         /* after this, we can draw the header with proper sizing */
         svg_header(of, head, graph_start, arg_percpu ? n_cpus : 0);
@@ -1503,6 +1579,14 @@ int svg_do(FILE *of,
                 svg_wait_bar(of, head, n_cpus, c, graph_start);
                 fprintf(of, "</g>\n\n");
         }
+
+        if (pressure_size > 0)
+                for (c = 0; c < _PRESSURE_MAX; c++) {
+                        offset += 7;
+                        fprintf(of, "<g transform=\"translate(10,%.03f)\">\n", 400.0 + (arg_scale_y * offset));
+                        svg_pressure_bar(of, head, c, graph_start);
+                        fprintf(of, "</g>\n\n");
+                }
 
         if (kcount) {
                 offset += 7;
