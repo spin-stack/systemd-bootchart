@@ -24,6 +24,7 @@
 
 #include <limits.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 
 #include "list.h"
@@ -42,6 +43,10 @@ struct ps_sched_struct {
         /* /proc/<n>/schedstat fields 1 & 2 */
         double runtime;
         double waittime;
+        /* /proc/<n>/io read_bytes & write_bytes: what the process had the block layer read for
+         * it, and the bytes it dirtied, since it started */
+        uint64_t read_bytes;
+        uint64_t write_bytes;
         int pss;
         struct list_sample_data *sampledata;
         struct ps_sched_struct *next;

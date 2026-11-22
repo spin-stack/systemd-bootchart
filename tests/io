@@ -1,0 +1,51 @@
+#! /bin/sh
+# The IO graphs show a boot's read and write bursts; /proc/PID/io says whose they were. The chart
+# labels each process with what it read and wrote, and lists who did the most.
+set -e
+d=$(mktemp -d)
+trap 'rm -rf "$d"' EXIT
+proc=$d/proc
+mkdir -p "$proc" "$d/out"
+
+put() {
+        printf "$2" > "$proc/$1"
+}
+
+process() { # pid ppid comm cgroup runtime-ns read-bytes write-bytes
+        mkdir -p "$proc/$1/task"
+        put "$1/comm" "$3\n"
+        put "$1/stat" "$1 ($3) S $2 0 0\n"
+        put "$1/cgroup" "0::$4\n"
+        put "$1/cmdline" ""
+        put "$1/schedstat" "$5 0 1\n"
+        put "$1/io" "rchar: 0\nwchar: 0\nsyscr: 0\nsyscw: 0\nread_bytes: $6\nwrite_bytes: $7\ncancelled_write_bytes: 0\n"
+}
+
+put vmstat "pgpgin 0\npgpgout 0\n"
+put schedstat "version 15\ntimestamp 0\ncpu0 0 0 0 0 0 0 1000 2000 3\n"
+process 1 0 systemd /init.scope 5000000 1000000 0
+process 62 1 systemd-journal /system.slice/systemd-journald.service 1000000 0 0
+
+timeout 30 ./systemd-bootchart --proc "$proc" -o "$d/out" -r -c -f 100 -n 40 &
+sampler=$!
+sleep 0.15
+# journald reads 12 MB and writes 2.5 MB while it runs; then it reads more without running, which a
+# process cannot do, so the chart keeps what it read while it ran
+process 62 1 systemd-journal /system.slice/systemd-journald.service 3000000 12000000 2500000
+put 1/schedstat "6000000 0 2\n"
+sleep 0.1
+put 62/io "read_bytes: 99000000\nwrite_bytes: 2500000\n"
+wait $sampler
+
+svg=$(echo "$d"/out/*.svg)
+fail=0
+expect() {
+        grep -qF -- "$1" "$svg" || { echo "not ok - the chart has no $1"; fail=1; }
+}
+expect '<![CDATA[systemd-journal]]> [62]<tspan class="run">3.0ms, 12.0MB read, 2.5MB written</tspan>'
+expect '<![CDATA[systemd]]> [1]<tspan class="run">6.0ms, 1.0MB read</tspan>'
+expect '>12.0MB read, 2.5MB written - <![CDATA[systemd-journal]]> [62]</text>'
+expect '>3.0ms, 12.0MB read, 2.5MB written - <![CDATA[systemd-journald.service]]> (1 process)'
+expect '<rect class="io"'
+[ $fail -eq 0 ] || grep -F '[CDATA[' "$svg"
+exit $fail
