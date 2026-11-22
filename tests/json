@@ -25,6 +25,9 @@ put vmstat "pgpgin 10\npgpgout 20\n"
 put schedstat "version 15\ntimestamp 0\ncpu0 0 0 0 0 0 0 1000 2000 3\n"
 put pressure/cpu "some avg10=0.00 avg60=0.00 avg300=0.00 total=500\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n"
 process 1 0 systemd /init.scope 5000000 0
+# a kernel thread read before systemd mounted a cgroup hierarchy, when the kernel lists none
+process 2 0 kthreadd / 0 0
+put 2/cgroup ""
 # a name a JSON writer has to escape
 process 62 1 'say "hi"\\' /system.slice/systemd-journald.service 1000000 250000
 
@@ -54,6 +57,8 @@ check(j.get("cgroup") == "/system.slice/systemd-journald.service", "the cgroup: 
 check(j.get("cpu_ns") == 1000000 and j.get("wait_ns") == 250000, "cpu and wait: %r" % j)
 check(j.get("read_bytes") == 4096, "read_bytes: %r" % j.get("read_bytes"))
 check(0 <= j.get("first_seen", -1) <= j.get("last_seen", -2), "first_seen before last_seen: %r" % j)
+k = ps.get(2, {})
+check(k.get("cgroup") == "/" and k.get("unit") == "/", "a kernel thread is in the root cgroup: %r" % k)
 check(chart["hz"] == 100 and chart["relative"] is True, "the settings: %r" % chart)
 for e in errors:
     print("not ok - " + e)

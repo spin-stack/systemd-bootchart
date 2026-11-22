@@ -116,27 +116,35 @@ static ssize_t pid_read(int procfd, int pid, const char *name, char *buf, size_t
 }
 
 /* The process's cgroup: systemd's own "name=systemd" hierarchy's path on a v1 or hybrid
- * hierarchy, and otherwise the cgroup v2 path, from the "0::" line of /proc/PID/cgroup. */
+ * hierarchy, and otherwise the cgroup v2 path, from the "0::" line of /proc/PID/cgroup.
+ * Until systemd mounts its hierarchy the kernel lists neither line, and every process is still
+ * in that hierarchy's root. A kernel thread first read then may never run again to be read
+ * again, so the root is "/" here too: otherwise one boot's kernel threads land under "/" and
+ * another's under no unit, by when the sampler first saw them. */
 static char *pid_cgroup(int procfd, int pid) {
         char buf[4096];
-        char *line, *v2 = NULL;
+        char *line, *path = NULL;
 
-        if (pid_read(procfd, pid, "cgroup", buf, sizeof(buf)) <= 0)
+        if (pid_read(procfd, pid, "cgroup", buf, sizeof(buf)) < 0)
                 return NULL;
 
         for (line = buf; line && *line; line = bufgetline(line)) {
                 char *p = strstr(line, ":name=systemd:");
 
                 if (p && p < strchrnul(line, '\n')) {
-                        p += strlen(":name=systemd:");
-                        return strndup(p, strcspn(p, "\n"));
+                        path = p + strlen(":name=systemd:");
+                        break;
                 }
 
                 if (startswith(line, "0::"))
-                        v2 = line + 3;
+                        path = line + 3;
         }
 
-        return v2 ? strndup(v2, strcspn(v2, "\n")) : NULL;
+        if (!path)
+                return strdup("/");
+
+        path[strcspn(path, "\n")] = '\0';
+        return strdup(path);
 }
 
 /* Reads what names the process: its comm, its command line with --cmdline, and its cgroup with
