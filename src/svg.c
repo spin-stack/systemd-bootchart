@@ -83,6 +83,7 @@ static struct list_sample_data *prev_sampledata;
 static void svg_header(FILE *of, struct list_sample_data *head, double graph_start, int n_cpus) {
         double w;
         double h;
+        int graphs;
         struct list_sample_data *sampledata_last;
 
         assert(head);
@@ -97,10 +98,12 @@ static void svg_header(FILE *of, struct list_sample_data *head, double graph_sta
         w = MAX(w, 1600.0);
         w = MAX(w, 20.0 + TABLE_WIDTH * (2 + arg_show_cgroup + arg_pss));
 
-        /* height is variable based on pss, psize, ksize */
-        h = 400.0 + (arg_scale_y * 30.0) /* base graphs and title */
-            + (arg_pss ? (100.0 * arg_scale_y) + (arg_scale_y * 7.0) : 0.0) /* pss estimate */
-            + psize + ksize + esize + pressure_size + ((n_cpus+1) * 15 * arg_scale_y);
+        /* as svg_do lays the chart out: graphs 7 rows apart below the header, the initcalls
+         * and the processes under them, then entropy and Pss. An estimate left ~400px of
+         * blank page below the processes. */
+        graphs = 2 + 2 * (n_cpus + 1) + (pressure_size > 0 ? _PRESSURE_MAX : 0) + (kcount ? 1 : 0);
+        h = 400.0 + graphs * 7 * arg_scale_y + ksize + psize + esize
+            + (arg_pss ? (100.0 * arg_scale_y) + (arg_scale_y * 7.0) : 0.0);
 
         fprintf(of, "<?xml version=\"1.0\" standalone=\"no\"?>\n");
         fprintf(of, "<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" ");
