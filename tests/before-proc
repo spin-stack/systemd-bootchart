@@ -1,0 +1,41 @@
+#! /bin/sh
+# As PID 1 the sampler starts before /proc is mounted, and the first counters it reads hold
+# everything since the kernel started: a boot's first 21 MB read, 124 KB written and 79 ms of
+# CPU. They are where the counting starts, not what happened in the interval before. A boot that
+# reads, writes and runs nothing while the chart does draws no IO, CPU or pressure bars.
+set -e
+d=$(mktemp -d)
+trap 'rm -rf "$d"' EXIT
+proc=$d/proc
+mkdir -p "$proc" "$d/out"
+
+put() {
+        printf "$2" > "$proc/$1"
+}
+
+timeout 30 ./systemd-bootchart --proc "$proc" -o "$d/out" -r -f 100 -n 30 &
+sampler=$!
+sleep 0.1
+mkdir -p "$proc/pressure" "$proc/1/task/1"
+put pressure/cpu "some avg10=0.00 avg60=0.00 avg300=0.00 total=27107\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n"
+put pressure/io "some avg10=0.00 avg60=0.00 avg300=0.00 total=12134\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=11072\n"
+put pressure/memory "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n"
+put schedstat "version 15\ntimestamp 0\ncpu0 0 0 0 0 0 0 79182916 31766260 3\n"
+put 1/comm "systemd\n"
+put 1/stat "1 (systemd) S 0 0 0\n"
+put 1/cgroup "0::/init.scope\n"
+put 1/cmdline ""
+put 1/schedstat "79182916 31766260 1\n"
+put vmstat "pgpgin 21413\npgpgout 124\n"
+wait $sampler
+
+svg=$(echo "$d"/out/*.svg)
+fail=0
+for class in bi bo cpu psome pfull; do
+        if grep -qE "^<rect class=\"$class\"" "$svg"; then
+                echo "not ok - the $class graph draws what the counters held when /proc appeared"
+                fail=1
+        fi
+done
+[ $fail -eq 0 ] || grep -E '^<rect class="(bi|bo|cpu|psome|pfull)"' "$svg"
+exit $fail
