@@ -71,7 +71,8 @@ EXTRA_DIST = \
 	man/standard-options.xml \
 	units/systemd-bootchart.service.in \
 	tests/run \
-	tests/identity
+	tests/identity \
+	tests/short-lived
 
 MANPAGES = man/bootchart.conf.5 man/systemd-bootchart.1
 MANPAGES_ALIAS = man/bootchart.conf.d.5
@@ -194,7 +195,8 @@ systemd_bootchart_LDADD = \
 
 TESTS = \
 	tests/run \
-	tests/identity
+	tests/identity \
+	tests/short-lived
 
 substitutions = \
 	'|rootlibexecdir=$(rootlibexecdir)|'
