@@ -1,7 +1,8 @@
 #! /bin/sh
 # The chart's header says what the sampler cost, since it ran on the CPUs it charted, and the
 # JSON carries the same number. A VM's long command line is cut in the header and kept whole in
-# a comment, where XML does not allow "--".
+# a comment, where XML does not allow "--". Its font sizes carry a unit, without which a browser
+# draws every label at 16px and the header's lines overlap. The page ends where the chart does.
 set -e
 d=$(mktemp -d)
 trap 'rm -rf "$d"' EXIT
@@ -13,6 +14,12 @@ printf 'systemd\n' > "$proc/1/comm"
 printf '1 (systemd) S 0 0 0\n' > "$proc/1/stat"
 printf '0::/init.scope\n' > "$proc/1/cgroup"
 printf '5000000 0 1\n' > "$proc/1/schedstat"
+# kthreadd, which the chart draws whether or not it ran
+mkdir -p "$proc/2/task/2"
+printf 'kthreadd\n' > "$proc/2/comm"
+printf '2 (kthreadd) S 0 0 0\n' > "$proc/2/stat"
+printf '0::/\n' > "$proc/2/cgroup"
+printf '0 0 0\n' > "$proc/2/schedstat"
 cmdline="console=ttyS0 root=/dev/vda -- $(printf 'option%03d ' $(seq 1 40))"
 printf '%s\n' "$cmdline" > "$proc/cmdline"
 
@@ -29,4 +36,22 @@ grep -qF "<!-- Boot options: console=ttyS0 root=/dev/vda -_ option001" "$d"/out/
         { echo "not ok - the full command line is not kept in a comment"; fail=1; }
 grep -qF "option040" "$d"/out/*.svg ||
         { echo "not ok - the comment lost the command line's end"; fail=1; }
+if grep -qE 'font-size: [0-9]+;' "$d"/out/*.svg; then
+        echo "not ok - a font size without a unit, which a browser ignores"; fail=1
+fi
+grep -qF 'text       { font-family: Verdana, Helvetica; font-size: 10px; }' "$d"/out/*.svg ||
+        { echo "not ok - labels have no font size"; fail=1; }
+python3 - "$d"/out/*.svg <<'PY' || fail=1
+import re, sys
+svg = open(sys.argv[1]).read()
+height = float(re.search(r'<svg width="[0-9.]+px" height="([0-9.]+)px"', svg).group(1))
+top = float(re.search(r'<g transform="translate\(10,([0-9.]+)\)">\n<!-- Process graph -->', svg).group(1))
+rows = svg.split("<!-- Process graph -->")[1].split("</g>")[0]
+bottom = top + max(float(y) + float(h) for y, h in
+                   re.findall(r'<rect class="ps" x="[0-9.]+" y="([0-9.]+)" width="[0-9.]+" height="([0-9.]+)"', rows))
+# the processes are the chart's last graph; below them is room for the idle mark's label
+if not bottom <= height <= bottom + 40:
+    print("not ok - the page is %.0fpx tall and its last process ends at %.0fpx" % (height, bottom))
+    sys.exit(1)
+PY
 exit $fail
