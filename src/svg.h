@@ -35,4 +35,5 @@ int svg_do(FILE *of,
            double graph_start,
            double log_start,
            double interval,
-           int overrun);
+           int overrun,
+           double sampler_cpu);

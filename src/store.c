@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -438,6 +439,7 @@ schedstat_next:
                 char filename[PATH_MAX];
                 int pid = pids[i];
                 struct ps_struct *ps;
+                struct stat task_st;
 
                 ps = ps_first;
                 while (ps->next_running) {
@@ -568,9 +570,15 @@ schedstat_next:
                  * See https://github.com/systemd/systemd/issues/139
                  */
 
-                /* Browse directory "/proc/[pid]/task" to know the thread ids of process [pid] */
+                /* Browse directory "/proc/[pid]/task" to know the thread ids of process [pid],
+                 * when it has threads: procfs counts them in the directory's link count, two
+                 * and one a thread. Most of a boot's processes have one, and listing their task
+                 * directories took most of the sampler's time. */
                 snprintf(filename, sizeof(filename), PID_FMT "/task", pid);
-                taskfd = openat(procfd, filename, O_RDONLY|O_DIRECTORY|O_CLOEXEC);
+                if (fstatat(procfd, filename, &task_st, 0) < 0 || task_st.st_nlink <= 3)
+                        taskfd = -1;
+                else
+                        taskfd = openat(procfd, filename, O_RDONLY|O_DIRECTORY|O_CLOEXEC);
                 if (taskfd >= 0) {
                         _cleanup_closedir_ DIR *taskdir = NULL;
 
