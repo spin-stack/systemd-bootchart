@@ -74,7 +74,8 @@ EXTRA_DIST = \
 	tests/identity \
 	tests/short-lived \
 	tests/io \
-	tests/pressure
+	tests/pressure \
+	tests/json
 
 MANPAGES = man/bootchart.conf.5 man/systemd-bootchart.1
 MANPAGES_ALIAS = man/bootchart.conf.d.5
@@ -185,6 +186,8 @@ noinst_LTLIBRARIES = libutils.la
 systemd_bootchart_SOURCES = \
 	src/bootchart.c \
 	src/bootchart.h \
+	src/json.c \
+	src/json.h \
 	src/store.c \
 	src/store.h \
 	src/svg.c \
@@ -200,7 +203,8 @@ TESTS = \
 	tests/identity \
 	tests/short-lived \
 	tests/io \
-	tests/pressure
+	tests/pressure \
+	tests/json
 
 substitutions = \
 	'|rootlibexecdir=$(rootlibexecdir)|'

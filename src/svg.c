@@ -864,12 +864,17 @@ static const char *const pressure_names[_PRESSURE_MAX] = {
 };
 
 /* Whether the kernel reported pressure: a kernel without it leaves every total at zero, and a
- * kernel with it has had some task wait for a CPU by the time a chart ends. */
+ * kernel with it has had some task wait for a CPU by the time a chart ends. HEAD is the oldest
+ * sample, as svg_do() walks them. */
 static bool svg_has_pressure(struct list_sample_data *head) {
+        struct list_sample_data *newest = head;
         int r;
 
+        while (newest->link_prev)
+                newest = newest->link_prev;
+
         for (r = 0; r < _PRESSURE_MAX; r++)
-                if (head->pressure[r][PRESSURE_SOME] > 0)
+                if (newest->pressure[r][PRESSURE_SOME] > 0)
                         return true;
         return false;
 }
