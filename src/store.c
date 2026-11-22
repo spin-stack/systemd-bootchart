@@ -151,6 +151,20 @@ static void pid_read_identity(int procfd, struct ps_struct *ps) {
         if (pid_read(procfd, ps->pid, "comm", comm, sizeof(comm)) > 0)
                 strscpy(ps->name, sizeof(ps->name), truncate_nl(comm));
 
+        /* A comm of digits is the descriptor an fexecve ran ("/dev/fd/9"), and an executor
+         * that exits before the next sample keeps it. Its exe link names the binary it was. */
+        if (ps->name[0] && ps->name[strspn(ps->name, "0123456789")] == '\0') {
+                char path[64], exe[PATH_MAX];
+                ssize_t n;
+
+                xsprintf(path, "%d/exe", ps->pid);
+                n = readlinkat(procfd, path, exe, sizeof(exe) - 1);
+                if (n > 0) {
+                        exe[n] = '\0';
+                        strscpy(ps->name, sizeof(ps->name), basename(exe));
+                }
+        }
+
         if (arg_show_cmdline)
                 pid_cmdline_strscpy(procfd, ps->name, sizeof(ps->name), ps->pid);
 
