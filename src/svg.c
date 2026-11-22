@@ -260,10 +260,10 @@ static int svg_title(FILE *of, const char *build, int pscount, double log_start,
                 fprintf(of, "Not detected");
 
         fprintf(of, "</text>\n");
-        fprintf(of, "<text class=\"sec\" x=\"20\" y=\"155\">Graph data: %.03f samples/sec, recorded %i total, dropped %i samples, %i processes, %i filtered</text>\n",
+        fprintf(of, "<text class=\"t2\" x=\"20\" y=\"155\">Graph data: %.03f samples/sec, recorded %i total, dropped %i samples, %i processes, %i filtered</text>\n",
                 arg_hz, n_samples, overrun, pscount, pfiltered);
         /* The sampler runs on the CPUs it charts, and its time is time the boot did not get. */
-        fprintf(of, "<text class=\"sec\" x=\"20\" y=\"167\">Sampler: %.01fms of CPU for %i samples, %.0fus a sample</text>\n",
+        fprintf(of, "<text class=\"t2\" x=\"20\" y=\"170\">Sampler: %.01fms of CPU for %i samples, %.0fus a sample</text>\n",
                 to_ms(sampler_cpu), n_samples, n_samples > 0 ? sampler_cpu * 1000000.0 / n_samples : 0.0);
 
         return 0;

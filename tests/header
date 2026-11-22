@@ -3,6 +3,7 @@
 # JSON carries the same number. A VM's long command line is cut in the header and kept whole in
 # a comment, where XML does not allow "--". Its font sizes carry a unit, without which a browser
 # draws every label at 16px and the header's lines overlap. The page ends where the chart does.
+# What the samples were and cost is drawn at the header's 12px, a line below the one before it.
 set -e
 d=$(mktemp -d)
 trap 'rm -rf "$d"' EXIT
@@ -44,6 +45,11 @@ grep -qF 'text       { font-family: Verdana, Helvetica; font-size: 10px; }' "$d"
 python3 - "$d"/out/*.svg <<'PY' || fail=1
 import re, sys
 svg = open(sys.argv[1]).read()
+lines = [(float(y), cls) for cls, y, what in
+         re.findall(r'<text class="([a-z0-9]+)" x="20" y="([0-9.]+)">(Idle time|Graph data|Sampler)', svg)]
+if [cls for _, cls in lines] != ["t2"] * 3 or any(b - a < 15 for (a, _), (b, _) in zip(lines, lines[1:])):
+    print("not ok - the header's last lines are not at its 12px, 15px apart: %s" % lines)
+    sys.exit(1)
 height = float(re.search(r'<svg width="[0-9.]+px" height="([0-9.]+)px"', svg).group(1))
 top = float(re.search(r'<g transform="translate\(10,([0-9.]+)\)">\n<!-- Process graph -->', svg).group(1))
 rows = svg.split("<!-- Process graph -->")[1].split("</g>")[0]
