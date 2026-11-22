@@ -21,6 +21,7 @@
  ***/
 
 #include <errno.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
@@ -40,6 +41,7 @@
 #include "store.h"
 #include "string-util.h"
 #include "svg.h"
+#include "time-util.h"
 #include "utf8.h"
 
 #define time_to_graph(t) ((t) * arg_scale_x)
@@ -65,6 +67,7 @@ static const char * const colorwheel[12] = {
 
 static double idletime = -1.0;
 static int pfiltered = 0;
+static int first_counter = 0;
 static int pcount = 0;
 static int kcount = 0;
 static double psize = 0;
@@ -899,23 +902,33 @@ static struct ps_struct *get_next_ps(struct ps_struct *ps, struct ps_struct *ps_
         return NULL;
 }
 
+/* Whether the process started while the chart ran: it was not there at the first sample that saw
+ * any process. Its CPU time is then all the chart's, and it started in the interval before the
+ * sample that first saw it. */
+static bool ps_born_in_chart(const struct ps_struct *ps) {
+        return ps->first->sampledata->counter > first_counter;
+}
+
 static bool ps_filter(struct ps_struct *ps) {
+        const struct ps_sched_struct *seen = ps->first->next;
+        double ran;
+
         if (!arg_filter)
                 return false;
 
-        /* can't draw data when there is only 1 sample (need start + stop) */
-        if (ps->first == ps->last)
+        /* no sample of its CPU time to draw */
+        if (!seen)
                 return true;
 
         /* don't filter kthreadd */
         if (ps->pid == 2)
                 return false;
 
-        /* drop stuff that doesn't use any real CPU time */
-        if (ps->total <= 0.001)
-                return true;
-
-        return 0;
+        /* Drop what did not run while the chart did, idle kernel threads mostly. Whatever ran is
+         * kept however briefly: in a boot of a few hundred milliseconds, a generator's 1 ms or an
+         * executor's single sample is a part of it. */
+        ran = ps_born_in_chart(ps) ? ps->last->runtime : ps->last->runtime - seen->runtime;
+        return ran <= 0;
 }
 
 static void svg_do_initcall(FILE *of, struct list_sample_data *head, int count_only, double graph_start) {
@@ -1059,6 +1072,8 @@ static void svg_ps_bars(FILE *of,
                         ps->ppid, to_ms(ps->total));
 
                 starttime = ps->first->sampledata->sampletime;
+                if (ps_born_in_chart(ps))
+                        starttime -= interval / NSEC_PER_SEC;
 
                 if (!ps_filter(ps)) {
                         /* remember where _to_ our children need to draw a line */
@@ -1094,17 +1109,28 @@ static void svg_ps_bars(FILE *of,
                 while (ps->sample->next) {
                         double rt, prt;
                         double wt, wrt;
+                        double from;
                         struct ps_sched_struct *prev;
 
                         prev = ps->sample;
                         ps->sample = ps->sample->next;
 
+                        /* The first sample holds what the process ran before it: since it started for
+                         * one that started in the chart, in the interval before the sample, and since
+                         * long before the chart for one already running, which is not drawn. */
+                        from = prev->sampledata->sampletime;
+                        if (prev == ps->first) {
+                                if (!ps_born_in_chart(ps))
+                                        continue;
+                                from = starttime;
+                        }
+
                         /* calculate over interval */
                         rt = ps->sample->runtime - prev->runtime;
                         wt = ps->sample->waittime - prev->waittime;
 
-                        prt = (rt / 1000000000) / (ps->sample->sampledata->sampletime - prev->sampledata->sampletime);
-                        wrt = (wt / 1000000000) / (ps->sample->sampledata->sampletime - prev->sampledata->sampletime);
+                        prt = (rt / 1000000000) / (ps->sample->sampledata->sampletime - from);
+                        wrt = (wt / 1000000000) / (ps->sample->sampledata->sampletime - from);
 
                         /* this can happen if timekeeping isn't accurate enough */
                         if (prt > 1.0)
@@ -1116,16 +1142,16 @@ static void svg_ps_bars(FILE *of,
                                 continue;
 
                         fprintf(of, "    <rect class=\"wait\" x=\"%.03f\" y=\"%.03f\" width=\"%.03f\" height=\"%.03f\" />\n",
-                                time_to_graph(prev->sampledata->sampletime - graph_start),
+                                time_to_graph(from - graph_start),
                                 ps_to_graph(j),
-                                time_to_graph(ps->sample->sampledata->sampletime - prev->sampledata->sampletime),
+                                time_to_graph(ps->sample->sampledata->sampletime - from),
                                 ps_to_graph(wrt));
 
                         /* draw cpu over wait - TODO figure out how/why run + wait > interval */
                         fprintf(of, "    <rect class=\"cpu\" x=\"%.03f\" y=\"%.03f\" width=\"%.03f\" height=\"%.03f\" />\n",
-                                time_to_graph(prev->sampledata->sampletime - graph_start),
+                                time_to_graph(from - graph_start),
                                 ps_to_graph(j + (1.0 - prt)),
-                                time_to_graph(ps->sample->sampledata->sampletime - prev->sampledata->sampletime),
+                                time_to_graph(ps->sample->sampledata->sampletime - from),
                                 ps_to_graph(prt));
                         t++;
                 }
@@ -1385,6 +1411,13 @@ int svg_do(FILE *of,
         /* count initcall thread count first */
         svg_do_initcall(of, head, 1, graph_start);
         ksize = kcount ? ps_to_graph(kcount) + (arg_scale_y * 2) : 0;
+
+        /* the first sample that saw processes, which may be after the first: as PID 1, the
+         * sampler starts before /proc is mounted */
+        first_counter = INT_MAX;
+        while ((ps = get_next_ps(ps, ps_first)))
+                first_counter = MIN(first_counter, ps->first->sampledata->counter);
+        ps = ps_first;
 
         /* then count processes */
         while ((ps = get_next_ps(ps, ps_first))) {

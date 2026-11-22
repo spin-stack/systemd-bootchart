@@ -1,0 +1,51 @@
+#! /bin/sh
+# A boot's generators and executors run for a millisecond or one sample's interval. The chart
+# draws every process that ran while it did, however briefly, and drops what did not run.
+# A process's bar is labelled "name [pid]<tspan", which the summary tables are not.
+set -e
+d=$(mktemp -d)
+trap 'rm -rf "$d"' EXIT
+proc=$d/proc
+mkdir -p "$proc" "$d/out"
+
+put() {
+        printf "$2" > "$proc/$1"
+}
+
+process() { # pid ppid comm runtime-ns
+        mkdir -p "$proc/$1/task"
+        put "$1/comm" "$3\n"
+        put "$1/stat" "$1 ($3) S $2 0 0\n"
+        put "$1/cgroup" "0::/init.scope\n"
+        put "$1/cmdline" ""
+        put "$1/schedstat" "$4 0 1\n"
+}
+
+put vmstat "pgpgin 0\npgpgout 0\n"
+put schedstat "version 15\ntimestamp 0\ncpu0 0 0 0 0 0 0 1000 2000 3\n"
+process 1 0 systemd 5000000
+process 2 0 kthreadd 100000
+process 20 2 kworker-idle 700000
+
+timeout 30 ./systemd-bootchart --proc "$proc" -o "$d/out" -r -f 50 -n 25 &
+sampler=$!
+sleep 0.1
+put 1/schedstat "6000000 0 2\n"
+# a generator: 0.3 ms of CPU, gone within two samples
+process 80 1 generator 300000
+sleep 0.03
+rm -rf "$proc/80"
+wait $sampler
+
+svg=$(echo "$d"/out/*.svg)
+fail=0
+grep -qF '<![CDATA[generator]]> [80]<tspan' "$svg" ||
+        { echo "not ok - the chart dropped a process that ran for 0.3 ms"; fail=1; }
+grep -qF '<![CDATA[systemd]]> [1]<tspan' "$svg" ||
+        { echo "not ok - the chart dropped PID 1"; fail=1; }
+if grep -qF '<![CDATA[kworker-idle]]> [20]<tspan' "$svg"; then
+        echo "not ok - the chart kept a kernel thread that never ran while it did"
+        fail=1
+fi
+[ $fail -eq 0 ] || grep -F '[CDATA[' "$svg"
+exit $fail
