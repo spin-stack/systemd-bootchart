@@ -227,6 +227,52 @@ static void garbage_collect_dead_processes(struct ps_struct *ps_first) {
 }
 
 
+static const char *const pressure_files[_PRESSURE_MAX] = {
+        [PRESSURE_CPU] = "pressure/cpu",
+        [PRESSURE_IO] = "pressure/io",
+        [PRESSURE_MEMORY] = "pressure/memory",
+};
+
+/* The stall totals in /proc/pressure: microseconds in which some task, or every task ("full"),
+ * waited for the resource. A kernel without CONFIG_PSI, or booted with psi=0, has none and the
+ * totals stay zero. */
+static void read_pressure(int procfd, struct list_sample_data *sampledata) {
+        static int fds[_PRESSURE_MAX] = { -1, -1, -1 };
+        int i;
+
+        for (i = 0; i < _PRESSURE_MAX; i++) {
+                char buf[256];
+                char *line;
+                ssize_t n;
+
+                if (fds[i] < 0) {
+                        fds[i] = openat(procfd, pressure_files[i], O_RDONLY|O_CLOEXEC);
+                        if (fds[i] < 0)
+                                continue;
+                }
+
+                n = pread(fds[i], buf, sizeof(buf) - 1, 0);
+                if (n <= 0)
+                        continue;
+                buf[n] = '\0';
+
+                for (line = buf; line && *line; line = bufgetline(line)) {
+                        const char *total = strstr(line, "total=");
+                        int which;
+
+                        if (!total)
+                                continue;
+                        if (startswith(line, "some "))
+                                which = PRESSURE_SOME;
+                        else if (startswith(line, "full "))
+                                which = PRESSURE_FULL;
+                        else
+                                continue;
+                        sampledata->pressure[i][which] = strtoull(total + strlen("total="), NULL, 10);
+                }
+        }
+}
+
 static int pid_compare(const void *a, const void *b) {
         int x = *(const int *) a, y = *(const int *) b;
 
@@ -364,6 +410,8 @@ schedstat_next:
                 if (!m)
                         break;
         }
+
+        read_pressure(procfd, sampledata);
 
         if (arg_entropy) {
                 if (e_fd < 0) {
@@ -514,8 +562,6 @@ schedstat_next:
                         ps_prev->cross = ps->sample;
 
                 ps_prev = ps->sample;
-                ps->total = (ps->last->runtime - ps->first->runtime)
-                            / 1000000000.0;
 
                 /* Take into account CPU runtime/waittime spent in non-main threads of the process
                  * by parsing "/proc/[pid]/task/[tid]/schedstat" for all [tid] != [pid]
@@ -565,13 +611,17 @@ schedstat_next:
                                 r = safe_atolli(rt, &delta_rt);
                                 if (r < 0)
                                     continue;
-                                r = safe_atolli(rt, &delta_wt);
+                                r = safe_atolli(wt, &delta_wt);
                                 if (r < 0)
                                     continue;
                                 ps->sample->runtime  += delta_rt;
                                 ps->sample->waittime += delta_wt;
                         }
                 }
+
+                /* after its threads', which the main thread's schedstat leaves out */
+                ps->total = (ps->last->runtime - ps->first->runtime)
+                            / 1000000000.0;
 
                 /* A process reads, writes, execs and moves only while it runs, so what it did
                  * since the last sample is read only when it ran since. */

@@ -55,10 +55,24 @@ struct ps_sched_struct {
         struct ps_struct *ps_new;
 };
 
+enum {
+        PRESSURE_CPU,
+        PRESSURE_IO,
+        PRESSURE_MEMORY,
+        _PRESSURE_MAX,
+};
+
+enum {
+        PRESSURE_SOME,
+        PRESSURE_FULL,
+};
+
 struct list_sample_data {
         double runtime[MAXCPUS];
         double waittime[MAXCPUS];
         double sampletime;
+        /* /proc/pressure/{cpu,io,memory} some and full totals, in microseconds */
+        uint64_t pressure[_PRESSURE_MAX][2];
         int entropy_avail;
         struct block_stat_struct blockstat;
         LIST_FIELDS(struct list_sample_data, link); /* DLL */
