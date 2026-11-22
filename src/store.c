@@ -163,6 +163,25 @@ static void pid_read_identity(int procfd, struct ps_struct *ps) {
         }
 }
 
+/* The process's read_bytes and write_bytes from /proc/PID/io, which a kernel without
+ * CONFIG_TASK_IO_ACCOUNTING does not have; the sample keeps the last values then. */
+static void pid_read_io(int procfd, int pid, struct ps_sched_struct *sample) {
+        char buf[512];
+        char *line;
+
+        if (pid_read(procfd, pid, "io", buf, sizeof(buf)) <= 0)
+                return;
+
+        for (line = buf; line && *line; line = bufgetline(line)) {
+                const char *v;
+
+                if ((v = startswith(line, "read_bytes: ")))
+                        sample->read_bytes = strtoull(v, NULL, 10);
+                else if ((v = startswith(line, "write_bytes: ")))
+                        sample->write_bytes = strtoull(v, NULL, 10);
+        }
+}
+
 const char *ps_unit(const struct ps_struct *ps) {
         const char *p, *slash;
 
@@ -554,9 +573,15 @@ schedstat_next:
                         }
                 }
 
+                /* A process reads, writes, execs and moves only while it runs, so what it did
+                 * since the last sample is read only when it ran since. */
+                ps->sample->read_bytes = ps->sample->prev->read_bytes;
+                ps->sample->write_bytes = ps->sample->prev->write_bytes;
                 if (ps->sample->prev == ps->first ||
-                    ps->sample->runtime > ps->sample->prev->runtime)
+                    ps->sample->runtime > ps->sample->prev->runtime) {
                         pid_read_identity(procfd, ps);
+                        pid_read_io(procfd, ps->pid, ps->sample);
+                }
 
                 if (!arg_pss)
                         goto next;

@@ -137,6 +137,7 @@ static void svg_header(FILE *of, struct list_sample_data *head, double graph_sta
         fprintf(of, "      rect.wait  { fill: rgb(240,240,0); stroke-width: 0; fill-opacity: 0.7; }\n");
         fprintf(of, "      rect.bi    { fill: rgb(240,128,128); stroke-width: 0; fill-opacity: 0.7; }\n");
         fprintf(of, "      rect.bo    { fill: rgb(192,64,64); stroke-width: 0; fill-opacity: 0.7; }\n");
+        fprintf(of, "      rect.io    { fill: rgb(240,128,0); stroke-width: 0; }\n");
         fprintf(of, "      rect.ps    { fill: rgb(192,192,192); stroke: rgb(128,128,128); fill-opacity: 0.7; }\n");
         fprintf(of, "      rect.krnl  { fill: rgb(240,240,0); stroke: rgb(128,128,128); fill-opacity: 0.7; }\n");
         fprintf(of, "      rect.box   { fill: rgb(240,240,240); stroke: rgb(192,192,192); }\n");
@@ -1032,6 +1033,14 @@ static void svg_do_initcall(FILE *of, struct list_sample_data *head, int count_o
         }
 }
 
+/* "12.3MB read, 1.0MB written" after LEAD, leaving out what is zero, and LEAD too when both are */
+static void svg_io_amounts(FILE *of, const char *lead, uint64_t read_bytes, uint64_t write_bytes) {
+        if (read_bytes > 0)
+                fprintf(of, "%s%.01fMB read", lead, read_bytes / 1000000.0);
+        if (write_bytes > 0)
+                fprintf(of, "%s%.01fMB written", read_bytes > 0 ? ", " : lead, write_bytes / 1000000.0);
+}
+
 static void svg_ps_bars(FILE *of,
                         struct list_sample_data *head,
                         int n_samples,
@@ -1138,6 +1147,13 @@ static void svg_ps_bars(FILE *of,
                         if (wrt > 1.0)
                                 wrt = 1.0;
 
+                        /* an orange strip under the intervals in which the process read or wrote */
+                        if (ps->sample->read_bytes > prev->read_bytes || ps->sample->write_bytes > prev->write_bytes)
+                                fprintf(of, "    <rect class=\"io\" x=\"%.03f\" y=\"%.03f\" width=\"%.03f\" height=\"3\" />\n",
+                                        time_to_graph(from - graph_start),
+                                        ps_to_graph(j + 1) - 3,
+                                        time_to_graph(ps->sample->sampledata->sampletime - from));
+
                         if ((prt < 0.1) && (wrt < 0.1)) /* =~ 26 (color threshold) */
                                 continue;
 
@@ -1164,22 +1180,17 @@ static void svg_ps_bars(FILE *of,
                         w = starttime;
 
                 /* text label of process name */
+                fprintf(of, "  <text x=\"%.03f\" y=\"%.03f\"><![CDATA[%s]]> [%i]<tspan class=\"run\">",
+                        time_to_graph(w - graph_start) + 5.0,
+                        ps_to_graph(j) + 14.0,
+                        escaped ? escaped : ps->name,
+                        ps->pid);
                 if ((ps->last->runtime - ps->first->runtime) > 1000000000.0)
-                        fprintf(of, "  <text x=\"%.03f\" y=\"%.03f\"><![CDATA[%s]]> [%i]<tspan class=\"run\">%.03fs</tspan> <![CDATA[%s]]></text>\n",
-                                time_to_graph(w - graph_start) + 5.0,
-                                ps_to_graph(j) + 14.0,
-                                escaped ? escaped : ps->name,
-                                ps->pid,
-                                (ps->last->runtime - ps->first->runtime) / 1000000000.0,
-                                strempty(ps_unit(ps)));
+                        fprintf(of, "%.03fs", (ps->last->runtime - ps->first->runtime) / 1000000000.0);
                 else
-                        fprintf(of, "  <text x=\"%.03f\" y=\"%.03f\"><![CDATA[%s]]> [%i]<tspan class=\"run\">%.01fms</tspan> <![CDATA[%s]]></text>\n",
-                                time_to_graph(w - graph_start) + 5.0,
-                                ps_to_graph(j) + 14.0,
-                                escaped ? escaped : ps->name,
-                                ps->pid,
-                                (ps->last->runtime - ps->first->runtime) / 1000000.0,
-                                strempty(ps_unit(ps)));
+                        fprintf(of, "%.01fms", (ps->last->runtime - ps->first->runtime) / 1000000.0);
+                svg_io_amounts(of, ", ", ps->last->read_bytes, ps->last->write_bytes);
+                fprintf(of, "</tspan> <![CDATA[%s]]></text>\n", strempty(ps_unit(ps)));
 
                 /* paint lines to the parent process */
                 if (ps->parent) {
@@ -1310,6 +1321,8 @@ static void svg_top_ten_units(FILE *of, struct ps_struct *ps_first) {
         struct unit_total {
                 const char *unit;
                 double total;
+                uint64_t read_bytes;
+                uint64_t write_bytes;
                 int processes;
         } units[256] = {}, *top[10] = {};
         struct ps_struct *ps;
@@ -1330,6 +1343,8 @@ static void svg_top_ten_units(FILE *of, struct ps_struct *ps_first) {
                         units[n_units++].unit = unit;
                 }
                 units[n].total += ps->total;
+                units[n].read_bytes += ps->last->read_bytes;
+                units[n].write_bytes += ps->last->write_bytes;
                 units[n].processes++;
         }
 
@@ -1346,13 +1361,48 @@ static void svg_top_ten_units(FILE *of, struct ps_struct *ps_first) {
                 }
 
         fprintf(of, "<text class=\"t2\" x=\"20\" y=\"0\">Top CPU consumers by unit:</text>\n");
-        for (n = 0; n < (int) ELEMENTSOF(top) && top[n]; n++)
-                fprintf(of, "<text class=\"t3\" x=\"20\" y=\"%d\">%3.01fms - <![CDATA[%s]]> (%d %s)</text>\n",
+        for (n = 0; n < (int) ELEMENTSOF(top) && top[n]; n++) {
+                fprintf(of, "<text class=\"t3\" x=\"20\" y=\"%d\">%3.01fms",
                         20 + (n * 13),
-                        to_ms(top[n]->total),
+                        to_ms(top[n]->total));
+                svg_io_amounts(of, ", ", top[n]->read_bytes, top[n]->write_bytes);
+                fprintf(of, " - <![CDATA[%s]]> (%d %s)</text>\n",
                         top[n]->unit,
                         top[n]->processes,
                         top[n]->processes == 1 ? "process" : "processes");
+        }
+}
+
+/* The processes that had the most read from or written to disk for them: who the IO graphs'
+ * bursts were for. */
+static void svg_top_ten_io(FILE *of, struct ps_struct *ps_first) {
+        struct ps_struct *top[10] = {};
+        struct ps_struct *ps;
+        int n, m;
+
+        ps = ps_first;
+        while ((ps = get_next_ps(ps, ps_first))) {
+                uint64_t io = ps->last->read_bytes + ps->last->write_bytes;
+
+                if (io == 0)
+                        continue;
+
+                for (n = 0; n < (int) ELEMENTSOF(top); n++) {
+                        if (top[n] && io <= top[n]->last->read_bytes + top[n]->last->write_bytes)
+                                continue;
+                        for (m = ELEMENTSOF(top) - 1; m > n; m--)
+                                top[m] = top[m-1];
+                        top[n] = ps;
+                        break;
+                }
+        }
+
+        fprintf(of, "<text class=\"t2\" x=\"20\" y=\"0\">Top disk I/O:</text>\n");
+        for (n = 0; n < (int) ELEMENTSOF(top) && top[n]; n++) {
+                fprintf(of, "<text class=\"t3\" x=\"20\" y=\"%d\">", 20 + (n * 13));
+                svg_io_amounts(of, "", top[n]->last->read_bytes, top[n]->last->write_bytes);
+                fprintf(of, " - <![CDATA[%s]]> [%d]</text>\n", top[n]->name, top[n]->pid);
+        }
 }
 
 static void svg_top_ten_pss(FILE *of, struct ps_struct *ps_first) {
@@ -1483,6 +1533,10 @@ int svg_do(FILE *of,
                 fprintf(of, "</g>\n\n");
         }
 
+        fprintf(of, "<g transform=\"translate(%d,200)\">\n", arg_show_cgroup ? 810 : 410);
+        svg_top_ten_io(of, ps_first);
+        fprintf(of, "</g>\n\n");
+
         if (arg_entropy) {
                 fprintf(of, "<g transform=\"translate(10,%.03f)\">\n", 400.0 + (arg_scale_y * offset) + ksize + psize);
                 svg_entropy_bar(of, head, graph_start);
@@ -1494,7 +1548,7 @@ int svg_do(FILE *of,
                 svg_pss_graph(of, head, ps_first, graph_start);
                 fprintf(of, "</g>\n\n");
 
-                fprintf(of, "<g transform=\"translate(%d,200)\">\n", arg_show_cgroup ? 810 : 410);
+                fprintf(of, "<g transform=\"translate(%d,200)\">\n", arg_show_cgroup ? 1210 : 810);
                 svg_top_ten_pss(of, ps_first);
                 fprintf(of, "</g>\n\n");
         }
