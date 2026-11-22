@@ -123,7 +123,7 @@ static ssize_t pid_read(int procfd, int pid, const char *name, char *buf, size_t
  * another's under no unit, by when the sampler first saw them. */
 static char *pid_cgroup(int procfd, int pid) {
         char buf[4096];
-        char *line, *path = NULL;
+        char *line, *path = NULL, *deleted;
 
         if (pid_read(procfd, pid, "cgroup", buf, sizeof(buf)) < 0)
                 return NULL;
@@ -144,6 +144,12 @@ static char *pid_cgroup(int procfd, int pid) {
                 return strdup("/");
 
         path[strcspn(path, "\n")] = '\0';
+
+        /* the kernel marks a cgroup removed since, which is the unit that ran all the same */
+        deleted = endswith(path, " (deleted)");
+        if (deleted)
+                *deleted = '\0';
+
         return strdup(path);
 }
 

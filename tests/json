@@ -28,6 +28,8 @@ process 1 0 systemd /init.scope 5000000 0
 # a kernel thread read before systemd mounted a cgroup hierarchy, when the kernel lists none
 process 2 0 kthreadd / 0 0
 put 2/cgroup ""
+# a unit whose cgroup was removed before its process was read
+process 63 1 systemd-user-se "/system.slice/systemd-user-sessions.service (deleted)" 1000000 0
 # a name a JSON writer has to escape
 process 62 1 'say "hi"\\' /system.slice/systemd-journald.service 1000000 250000
 
@@ -59,6 +61,8 @@ check(j.get("read_bytes") == 4096, "read_bytes: %r" % j.get("read_bytes"))
 check(0 <= j.get("first_seen", -1) <= j.get("last_seen", -2), "first_seen before last_seen: %r" % j)
 k = ps.get(2, {})
 check(k.get("cgroup") == "/" and k.get("unit") == "/", "a kernel thread is in the root cgroup: %r" % k)
+u = ps.get(63, {})
+check(u.get("unit") == "systemd-user-sessions.service", "a removed cgroup's unit: %r" % u.get("unit"))
 check(chart["hz"] == 100 and chart["relative"] is True, "the settings: %r" % chart)
 for e in errors:
     print("not ok - " + e)
