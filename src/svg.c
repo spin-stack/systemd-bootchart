@@ -156,12 +156,15 @@ static void svg_header(FILE *of, struct list_sample_data *head, double graph_sta
         fprintf(of, "      line.dot   { stroke-dasharray: 2 4; }\n");
         fprintf(of, "      line.idle  { stroke: rgb(64,64,64); stroke-dasharray: 10 6; stroke-opacity: 0.7; }\n");
 
-        fprintf(of, "      .run       { font-size: 8; font-style: italic; }\n");
-        fprintf(of, "      text       { font-family: Verdana, Helvetica; font-size: 10; }\n");
-        fprintf(of, "      text.sec   { font-size: 8; }\n");
-        fprintf(of, "      text.t1    { font-size: 24; }\n");
-        fprintf(of, "      text.t2    { font-size: 12; }\n");
-        fprintf(of, "      text.idle  { font-size: 18; }\n");
+        /* in px: CSS ignores a length without a unit, and browsers then drew every label at
+         * their default 16px, which ran the header's lines and the top tables' columns into
+         * each other */
+        fprintf(of, "      .run       { font-size: 8px; font-style: italic; }\n");
+        fprintf(of, "      text       { font-family: Verdana, Helvetica; font-size: 10px; }\n");
+        fprintf(of, "      text.sec   { font-size: 8px; }\n");
+        fprintf(of, "      text.t1    { font-size: 24px; }\n");
+        fprintf(of, "      text.t2    { font-size: 12px; }\n");
+        fprintf(of, "      text.idle  { font-size: 18px; }\n");
 
         fprintf(of, "    ]]>\n   </style>\n</defs>\n\n");
 }
