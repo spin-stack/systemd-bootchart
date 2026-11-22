@@ -381,7 +381,6 @@ schedstat_next:
 
                 /* end of our LL? then append a new record */
                 if (ps->pid != pid) {
-                        _cleanup_fclose_ FILE *st = NULL;
                         struct ps_struct *parent;
 
                         /* find the insertion point for the last item */
@@ -411,19 +410,13 @@ schedstat_next:
                         /* mark our first sample */
                         ps->first = ps->last = ps->sample;
 
-                        /* ppid */
-                        sprintf(filename, "%d/stat", pid);
-                        fd = openat(procfd, filename, O_RDONLY|O_CLOEXEC);
-                        if (fd < 0)
+                        /* ppid, after the comm in parentheses, which can hold spaces and
+                         * parentheses of its own, so after the last ')' */
+                        if (pid_read(procfd, pid, "stat", buf, sizeof(buf)) <= 0)
                                 continue;
 
-                        st = fdopen(fd, "re");
-                        if (!st) {
-                                close(fd);
-                                continue;
-                        }
-
-                        if (!fscanf(st, "%*s %*s %*s %i", &p))
+                        m = strrchr(buf, ')');
+                        if (!m || sscanf(m + 1, " %*c %i", &p) != 1)
                                 continue;
 
                         ps->ppid = p;

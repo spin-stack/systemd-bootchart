@@ -28,6 +28,8 @@ process 1 0 systemd "0::/init.scope\n" 5000000
 process 62 1 9 "0::/init.scope\n" 1000000
 process 70 1 9 "1:name=systemd:/init.scope\n0::/\n" 1000000
 process 71 1 sshd "1:name=systemd:/system.slice/ssh.service\n" 2000000
+# a comm with a space and a parenthesis, which /proc/PID/stat does not quote
+process 72 1 "Web (Content" "0::/user.slice/user-0.slice/session-1.scope\n" 2000000
 
 timeout 30 ./systemd-bootchart --proc "$proc" -o "$d/out" -r -c -f 100 -n 50 &
 sampler=$!
@@ -38,6 +40,7 @@ put 62/schedstat "3000000 0 2\n"
 put 70/comm "systemd-logind\n"
 put 70/cgroup "1:name=systemd:/system.slice/systemd-logind.service\n0::/\n"
 put 70/schedstat "3000000 0 2\n"
+put 72/schedstat "3000000 0 2\n"
 wait $sampler
 
 svg=$(echo "$d"/out/*.svg)
@@ -50,6 +53,8 @@ expect '<![CDATA[systemd-journald.service]]>'
 expect '<![CDATA[systemd-logind]]> [70]'
 expect '<![CDATA[systemd-logind.service]]>'
 expect '<![CDATA[ssh.service]]>'
+expect '<![CDATA[Web (Content]]> [72]<tspan'
+expect '<![CDATA[session-1.scope]]>'
 expect '<![CDATA[systemd-journald.service]]> (1 process)'
 if grep -qF '<![CDATA[9]]>' "$svg"; then
         echo "not ok - a process is still named after the executor's descriptor"
