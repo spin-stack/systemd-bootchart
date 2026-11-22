@@ -62,6 +62,7 @@
 #include "parse-util.h"
 #include "path-util.h"
 #include "store.h"
+#include "stdio-util.h"
 #include "string-util.h"
 #include "strxcpyx.h"
 #include "svg.h"
@@ -75,6 +76,7 @@ static int exiting = 0;
 #define DEFAULT_SCALE_Y 20.0  /* 16px = 1 process bar */
 #define DEFAULT_INIT ROOTLIBEXECDIR "/systemd"
 #define DEFAULT_OUTPUT "/run/log"
+#define DEFAULT_PROC "/proc"
 
 /* graph defaults */
 bool arg_entropy = false;
@@ -92,6 +94,7 @@ double arg_scale_y = DEFAULT_SCALE_Y;
 
 char arg_init_path[PATH_MAX] = DEFAULT_INIT;
 char arg_output_path[PATH_MAX] = DEFAULT_OUTPUT;
+char arg_proc_path[PATH_MAX] = DEFAULT_PROC;
 
 static void signal_handler(int sig) {
         exiting = 1;
@@ -144,6 +147,7 @@ static void help(void) {
                "  -C --cmdline         Display full command lines with arguments\n"
                "  -c --control-group   Display process control group\n"
                "     --per-cpu         Draw each CPU utilization and wait bar also\n"
+               "     --proc=PATH       Sample processes from PATH instead of [%s]\n"
                "  -h --help            Display this message\n\n"
                "See bootchart.conf for more information.\n",
                program_invocation_short_name,
@@ -152,13 +156,15 @@ static void help(void) {
                DEFAULT_SCALE_X,
                DEFAULT_SCALE_Y,
                DEFAULT_OUTPUT,
-               DEFAULT_INIT);
+               DEFAULT_INIT,
+               DEFAULT_PROC);
 }
 
 static int parse_argv(int argc, char *argv[]) {
 
         enum {
                 ARG_PERCPU = 0x100,
+                ARG_PROC,
         };
 
         static const struct option options[] = {
@@ -176,6 +182,7 @@ static int parse_argv(int argc, char *argv[]) {
                 {"scale-y",       required_argument,  NULL,  'y'       },
                 {"entropy",       no_argument,        NULL,  'e'       },
                 {"per-cpu",       no_argument,        NULL,  ARG_PERCPU},
+                {"proc",          required_argument,  NULL,  ARG_PROC  },
                 {}
         };
         int c, r;
@@ -238,6 +245,10 @@ static int parse_argv(int argc, char *argv[]) {
                         break;
                 case ARG_PERCPU:
                         arg_percpu = true;
+                        break;
+                case ARG_PROC:
+                        path_kill_slashes(optarg);
+                        strscpy(arg_proc_path, sizeof(arg_proc_path), optarg);
                         break;
                 case 'h':
                         help();
@@ -333,6 +344,7 @@ int main(int argc, char *argv[]) {
                 .sa_handler = signal_handler,
         };
         bool has_procfs = false;
+        char vmstat_path[PATH_MAX + 8];
 
         parse_conf();
 
@@ -394,7 +406,8 @@ int main(int argc, char *argv[]) {
                 return EXIT_FAILURE;
         }
 
-        has_procfs = access("/proc/vmstat", F_OK) == 0;
+        xsprintf(vmstat_path, "%s/vmstat", arg_proc_path);
+        has_procfs = access(vmstat_path, F_OK) == 0;
 
         LIST_HEAD_INIT(head);
 
@@ -421,11 +434,12 @@ int main(int argc, char *argv[]) {
 
                 if (!has_procfs) {
                         /* wait for /proc to become available, discarding samples */
-                        has_procfs = access("/proc/vmstat", F_OK) == 0;
+                        xsprintf(vmstat_path, "%s/vmstat", arg_proc_path);
+        has_procfs = access(vmstat_path, F_OK) == 0;
                 } else if (proc) {
                         rewinddir(proc);
                 } else {
-                        proc = opendir("/proc");
+                        proc = opendir(arg_proc_path);
                 }
 
                 if (proc) {
@@ -472,7 +486,6 @@ int main(int argc, char *argv[]) {
         while (ps->next_running) {
                 ps = ps->next_running;
                 ps->schedstat = safe_close(ps->schedstat);
-                ps->sched = safe_close(ps->sched);
                 ps->smaps = safe_fclose(ps->smaps);
         }
 

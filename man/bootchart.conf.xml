@@ -154,7 +154,8 @@
 
       <varlistentry>
         <term><varname>ControlGroup=no</varname></term>
-        <listitem><para>Display process control group.
+        <listitem><para>Label each process with the unit whose control
+        group it is in, and list the units that used the most CPU time.
         </para></listitem>
       </varlistentry>
 
