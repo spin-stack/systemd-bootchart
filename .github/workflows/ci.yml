@@ -10,7 +10,7 @@ on:
 
 jobs:
   unit-test:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     concurrency:
       group: ${{ github.workflow }}-${{ toJSON(matrix.env) }}-${{ github.ref }}
       cancel-in-progress: true
@@ -22,17 +22,17 @@ jobs:
           - { CC: "clang", CFLAGS: "-fno-omit-frame-pointer -fsanitize=undefined,address -ggdb3 -Og" }
     env: ${{ matrix.env }}
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install intltool gcc llvm clang
+        sudo apt-get install autoconf automake libtool pkg-config gcc llvm clang
 
     - name: ${{ format('Build check ({0})', env.CC) }}
       run: |
         ./autogen.sh
-        ./configure --without-libsystemd --disable-man || cat config.log
+        ./configure --without-libsystemd --disable-man || { cat config.log; exit 1; }
         make -j
         make -j -k check
 
