@@ -572,220 +572,76 @@ static void svg_pss_graph(FILE *of,
 
 }
 
-static void svg_io_bi_bar(FILE *of,
-                          struct list_sample_data *head,
-                          int n_samples,
-                          double graph_start,
-                          double interval) {
+/* The kilobytes the kernel sent to its disks over one interval, read (pgpgin) or written
+ * (pgpgout), per second. The kernel counts both as it submits each bio, so they are current at
+ * every sample, and each interval is drawn on its own: upstream averaged 250 ms around each bar,
+ * which drew a 5 ms burst as a plateau 250 ms wide that rose before the burst began
+ * (spin-stack/machine#538). A counter that went back, as one read while it was being written
+ * would, draws nothing. */
+static double io_rate(const struct list_sample_data *from, const struct list_sample_data *to, bool read) {
+        double kb, dt;
 
-        double max = 0.0;
-        double range;
-        int max_here = 0;
-        int i;
-        int k;
-        struct list_sample_data *start_sampledata;
-        struct list_sample_data *stop_sampledata;
+        kb = read ? (double) to->blockstat.bi - from->blockstat.bi
+                  : (double) to->blockstat.bo - from->blockstat.bo;
+        dt = to->sampletime - from->sampletime;
 
-        fprintf(of, "<!-- IO utilization graph - In -->\n");
-        fprintf(of, "<text class=\"t2\" x=\"5\" y=\"-15\">IO utilization - read</text>\n");
-
-        /*
-         * calculate rounding range
-         *
-         * We need to round IO data since IO block data is not updated on
-         * each poll. Applying a smoothing function loses some burst data,
-         * so keep the smoothing range short.
-         */
-        range = 0.25 / (1.0 / arg_hz);
-        if (range < 2.0)
-                range = 2.0; /* no smoothing */
-
-        /* surrounding box */
-        svg_graph_box(of, head, 5, graph_start);
-
-        /* find the max IO first */
-        i = 1;
-        LIST_FOREACH_BEFORE(link, sampledata, head) {
-                int start;
-                int stop;
-                int diff;
-                double tot;
-
-                start = MAX(i - ((range / 2) - 1), 0);
-                stop = MIN(i + (range / 2), n_samples - 1);
-                diff = (stop - start);
-
-                start_sampledata = sampledata;
-                stop_sampledata = sampledata;
-
-                for (k = 0; k < ((range/2) - 1) && start_sampledata->link_next; k++)
-                        start_sampledata = start_sampledata->link_next;
-
-                for (k = 0; k < (range/2) && stop_sampledata->link_prev; k++)
-                        stop_sampledata = stop_sampledata->link_prev;
-
-                tot = (double)(stop_sampledata->blockstat.bi - start_sampledata->blockstat.bi) / diff;
-                if (tot > max) {
-                        max = tot;
-                        max_here = i;
-                }
-
-                i++;
-        }
-
-        /* plot bi */
-        i = 1;
-        prev_sampledata = head;
-        LIST_FOREACH_BEFORE(link, sampledata, head) {
-                int start;
-                int stop;
-                int diff;
-                double tot;
-                double pbi = 0;
-
-                start = MAX(i - ((range / 2) - 1), 0);
-                stop = MIN(i + (range / 2), n_samples);
-                diff = (stop - start);
-
-                start_sampledata = sampledata;
-                stop_sampledata = sampledata;
-
-                for (k = 0; k < ((range/2)-1) && start_sampledata->link_next; k++)
-                        start_sampledata = start_sampledata->link_next;
-
-                for (k = 0; k < (range/2) && stop_sampledata->link_prev; k++)
-                        stop_sampledata = stop_sampledata->link_prev;
-
-                tot = (double)(stop_sampledata->blockstat.bi - start_sampledata->blockstat.bi) / diff;
-
-                if (max > 0)
-                        pbi = tot / max;
-
-                if (pbi > 0.001)
-                        fprintf(of, "<rect class=\"bi\" x=\"%.03f\" y=\"%.03f\" width=\"%.03f\" height=\"%.03f\" />\n",
-                                time_to_graph(prev_sampledata->sampletime - graph_start),
-                                (arg_scale_y * 5) - (pbi * (arg_scale_y * 5)),
-                                time_to_graph(sampledata->sampletime - prev_sampledata->sampletime),
-                                pbi * (arg_scale_y * 5));
-
-                /* labels around highest value */
-                if (i == max_here)
-                        fprintf(of, "  <text class=\"sec\" x=\"%.03f\" y=\"%.03f\">%0.2fmb/sec</text>\n",
-                                time_to_graph(sampledata->sampletime - graph_start) + 5,
-                                ((arg_scale_y * 5) - (pbi * (arg_scale_y * 5))) + 15,
-                                max / 1024.0 / (interval / 1000000000.0));
-
-                i++;
-                prev_sampledata = sampledata;
-        }
+        return kb > 0 && dt > 0 ? kb / dt : 0;
 }
 
-static void svg_io_bo_bar(FILE *of,
-                          struct list_sample_data *head,
-                          int n_samples,
-                          double graph_start,
-                          double interval) {
-        double max = 0.0;
-        double range;
-        int max_here = 0;
-        int i;
-        int k;
-        struct list_sample_data *start_sampledata;
-        struct list_sample_data *stop_sampledata;
+/* The larger of the two graphs' peaks: both are drawn on it, so a write graph's height says what
+ * it wrote against what was read. Each scaled to its own peak, a write graph with 4 KB in it
+ * filled its box the way a read graph with 20 MB did. */
+static double io_peak(struct list_sample_data *head) {
+        double peak = 0;
 
-        fprintf(of, "<!-- IO utilization graph - out -->\n");
-        fprintf(of, "<text class=\"t2\" x=\"5\" y=\"-15\">IO utilization - write</text>\n");
-
-        /*
-         * calculate rounding range
-         *
-         * We need to round IO data since IO block data is not updated on
-         * each poll. Applying a smoothing function loses some burst data,
-         * so keep the smoothing range short.
-         */
-        range = 0.25 / (1.0 / arg_hz);
-        if (range < 2.0)
-                range = 2.0; /* no smoothing */
-
-        /* surrounding box */
-        svg_graph_box(of, head, 5, graph_start);
-
-        /* find the max IO first */
-        i = 0;
-        LIST_FOREACH_BEFORE(link, sampledata, head) {
-                int start;
-                int stop;
-                int diff;
-                double tot;
-
-                start = MAX(i - ((range / 2) - 1), 0);
-                stop = MIN(i + (range / 2), n_samples - 1);
-                diff = (stop - start);
-
-                start_sampledata = sampledata;
-                stop_sampledata = sampledata;
-
-                for (k = 0; k < (range/2) - 1 && start_sampledata->link_next; k++)
-                        start_sampledata = start_sampledata->link_next;
-
-                for (k = 0; k < (range/2) && stop_sampledata->link_prev; k++)
-                        stop_sampledata = stop_sampledata->link_prev;
-
-                tot = (double)(stop_sampledata->blockstat.bo - start_sampledata->blockstat.bo) / diff;
-                if (tot > max) {
-                        max = tot;
-                        max_here = i;
-                }
-
-                i++;
-        }
-
-        /* plot bo */
         prev_sampledata = head;
-        i = 1;
-
         LIST_FOREACH_BEFORE(link, sampledata, head) {
-                int start, stop, diff;
-                double tot, pbo;
-
-                pbo = 0;
-
-                start = MAX(i - ((range / 2) - 1), 0);
-                stop = MIN(i + (range / 2), n_samples);
-                diff = (stop - start);
-
-                start_sampledata = sampledata;
-                stop_sampledata = sampledata;
-
-                for (k = 0; k < ((range/2)-1) && start_sampledata->link_next; k++)
-                        start_sampledata = start_sampledata->link_next;
-
-                for (k = 0; k < (range/2) && stop_sampledata->link_prev; k++)
-                        stop_sampledata = stop_sampledata->link_prev;
-
-                tot = (double)(stop_sampledata->blockstat.bo - start_sampledata->blockstat.bo)
-                        / diff;
-
-                if (max > 0)
-                        pbo = tot / max;
-
-                if (pbo > 0.001)
-                        fprintf(of, "<rect class=\"bo\" x=\"%.03f\" y=\"%.03f\" width=\"%.03f\" height=\"%.03f\" />\n",
-                                time_to_graph(prev_sampledata->sampletime - graph_start),
-                                (arg_scale_y * 5) - (pbo * (arg_scale_y * 5)),
-                                time_to_graph(sampledata->sampletime - prev_sampledata->sampletime),
-                                pbo * (arg_scale_y * 5));
-
-                /* labels around highest bo value */
-                if (i == max_here)
-                        fprintf(of, "  <text class=\"sec\" x=\"%.03f\" y=\"%.03f\">%0.2fmb/sec</text>\n",
-                                time_to_graph(sampledata->sampletime - graph_start) + 5,
-                                ((arg_scale_y * 5) - (pbo * (arg_scale_y * 5))),
-                                max / 1024.0 / (interval / 1000000000.0));
-
-                i++;
+                peak = MAX(peak, io_rate(prev_sampledata, sampledata, true));
+                peak = MAX(peak, io_rate(prev_sampledata, sampledata, false));
                 prev_sampledata = sampledata;
         }
+
+        return peak;
+}
+
+static void svg_io_bar(FILE *of, struct list_sample_data *head, double graph_start, double scale, bool read) {
+        struct list_sample_data *peak_at = NULL;
+        double peak = 0;
+
+        fprintf(of, "<!-- IO utilization graph - %s -->\n", read ? "In" : "out");
+        fprintf(of, "<text class=\"t2\" x=\"5\" y=\"-15\">IO utilization - %s, each %.0f ms; full height %.2f MB/s, both graphs</text>\n",
+                read ? "read" : "write", 1000.0 / arg_hz, scale / 1024.0);
+
+        svg_graph_box(of, head, 5, graph_start);
+
+        prev_sampledata = head;
+        LIST_FOREACH_BEFORE(link, sampledata, head) {
+                double rate, h;
+
+                rate = io_rate(prev_sampledata, sampledata, read);
+                h = scale > 0 ? rate / scale * (arg_scale_y * 5) : 0;
+
+                if (rate > peak) {
+                        peak = rate;
+                        peak_at = sampledata;
+                }
+
+                if (h > 0.001)
+                        fprintf(of, "<rect class=\"%s\" x=\"%.03f\" y=\"%.03f\" width=\"%.03f\" height=\"%.03f\" />\n",
+                                read ? "bi" : "bo",
+                                time_to_graph(prev_sampledata->sampletime - graph_start),
+                                (arg_scale_y * 5) - h,
+                                time_to_graph(sampledata->sampletime - prev_sampledata->sampletime),
+                                h);
+
+                prev_sampledata = sampledata;
+        }
+
+        if (peak_at)
+                fprintf(of, "  <text class=\"sec\" x=\"%.03f\" y=\"%.03f\">%0.2f MB/s</text>\n",
+                        time_to_graph(peak_at->sampletime - graph_start) + 5,
+                        MAX((arg_scale_y * 5) - peak / scale * (arg_scale_y * 5) - 2, 10.0),
+                        peak / 1024.0);
 }
 
 static void svg_cpu_bar(FILE *of, struct list_sample_data *head, int n_cpus, int cpu_num, double graph_start) {
@@ -1514,6 +1370,7 @@ int svg_do(FILE *of,
 
         struct ps_struct *ps;
         double offset = 7;
+        double io_scale;
         int r, c, x;
 
         sampledata = head;
@@ -1548,11 +1405,12 @@ int svg_do(FILE *of,
         fprintf(of, "<rect class=\"bg\" width=\"100%%\" height=\"100%%\" />\n\n");
 
         fprintf(of, "<g transform=\"translate(10,400)\">\n");
-        svg_io_bi_bar(of, head, n_samples, graph_start, interval);
+        io_scale = io_peak(head);
+        svg_io_bar(of, head, graph_start, io_scale, true);
         fprintf(of, "</g>\n\n");
 
         fprintf(of, "<g transform=\"translate(10,%.03f)\">\n", 400.0 + (arg_scale_y * offset));
-        svg_io_bo_bar(of, head, n_samples, graph_start, interval);
+        svg_io_bar(of, head, graph_start, io_scale, false);
         fprintf(of, "</g>\n\n");
 
         /* No graph of the CPUs' summed run delay, which upstream drew under each of these: it
