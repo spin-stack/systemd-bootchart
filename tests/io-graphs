@@ -1,0 +1,43 @@
+#! /bin/sh
+# The IO graphs draw what the kernel sent to its disks in each interval on its own, and both on
+# one scale: a burst is one bar where it happened, and a write graph's height is what was written
+# against what was read (spin-stack/machine#538).
+set -e
+d=$(mktemp -d)
+trap 'rm -rf "$d"' EXIT
+proc=$d/proc
+mkdir -p "$proc/1/task" "$d/out"
+
+put() {
+        printf "$2" > "$proc/$1"
+}
+
+put vmstat "pgpgin 0\npgpgout 0\n"
+put schedstat "version 15\ntimestamp 0\ncpu0 0 0 0 0 0 0 1000 2000 3\n"
+put 1/comm "systemd\n"
+put 1/stat "1 (systemd) S 0 0 0\n"
+put 1/cgroup "0::/init.scope\n"
+put 1/cmdline ""
+put 1/schedstat "5000000 0 1\n"
+
+timeout 30 ./systemd-bootchart --proc "$proc" -o "$d/out" -r -f 100 -n 40 &
+sampler=$!
+sleep 0.15
+# 10 MB read and 100 KB written, at once, between two samples
+put vmstat "pgpgin 10000\npgpgout 100\n"
+wait $sampler
+
+svg=$(echo "$d"/out/*.svg)
+fail=0
+bars() {
+        grep -o "<rect class=\"$1\"[^>]*height=\"[0-9.]*\"" "$svg" | sed 's/.*height="\([0-9.]*\)"/\1/'
+}
+bi=$(bars bi)
+bo=$(bars bo)
+[ "$(echo "$bi" | grep -c .)" -eq 1 ] || { echo "not ok - the read burst is drawn as $(echo "$bi" | grep -c .) bars, not one"; fail=1; }
+[ "$(echo "$bo" | grep -c .)" -eq 1 ] || { echo "not ok - the write burst is drawn as $(echo "$bo" | grep -c .) bars, not one"; fail=1; }
+[ "$(awk -v r="$bi" -v w="$bo" 'BEGIN { print (w > 0 && r / w > 99 && r / w < 101) }')" = 1 ] ||
+        { echo "not ok - the read bar is $bi high and the write bar $bo, not 100 times less"; fail=1; }
+grep -qF 'IO utilization - write, each 10 ms; full height ' "$svg" || { echo "not ok - the write graph does not say its scale"; fail=1; }
+[ $fail -eq 0 ] || grep -F 'IO utilization' "$svg"
+exit $fail
